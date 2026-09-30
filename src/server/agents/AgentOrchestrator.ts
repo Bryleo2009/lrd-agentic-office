@@ -13,6 +13,7 @@ import { addLesson, extractLessons, forgetToolFailures, lessonFromToolFailure, l
 import { guideFor, TASK_KIND_LABEL, taskKind } from "../missions/guides";
 import { ASK_RULE, extractQuestion, pickOption, questionKey } from "../missions/questions";
 import { migrationFiles, scanSecrets } from "../missions/secrets";
+import { libraryPrompt, relatedDocs, saveDoc, type NewDoc } from "../library";
 import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
@@ -425,6 +426,78 @@ export class AgentOrchestrator {
     if (!m || !TERMINAL.includes(m.status)) return;
     if (m.questions.some((q) => q.status === "open")) this.setMission(id, { questions: m.questions.map((q) => (q.status === "open" ? { ...q, status: "expired" as const } : q)) });
     if (m.status !== "cancelled") recordOutcome(m.lessonIds, id, m.status === "done");
+    if (m.status !== "cancelled") this.documentMission(m);
+  }
+
+  // ------------------------------------------------------------------ biblioteca
+  /** Guarda un documento en la biblioteca y lo muestra en la oficina ("documentar"). */
+  private document(missionId: string, agentId: AgentId, d: NewDoc): void {
+    try {
+      const doc = saveDoc({ missionId, agentId, ...d });
+      this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Documentado en la biblioteca: ${firstLine(doc.title, 90)}`, status: "info", metadata: { library: doc.id } });
+      eventBus.broadcast({ kind: "library", doc: { id: doc.id, kind: doc.kind, title: doc.title, missionId: doc.missionId } });
+    } catch (e) {
+      console.error("[lrd] No se pudo documentar en la biblioteca:", e);
+    }
+  }
+
+  /** "Consultar": documentos de la biblioteca relacionados con la tarea, como texto para el prompt. */
+  private libraryText(m: Mission, agentId: AgentId, text: string): string {
+    const repoIds = m.repos.length ? m.repos.map((r) => r.repositoryId) : m.repositoryId === NO_REPO ? [] : [m.repositoryId];
+    let docs;
+    try {
+      docs = relatedDocs(text, { repoIds, excludeMissionId: m.id });
+    } catch {
+      return "";
+    }
+    if (!docs.length) return "";
+    this.emit(m.id, agentId, {
+      provider: "system",
+      sessionId: null,
+      type: "AGENT_STATUS",
+      title: `Consultó la biblioteca: ${docs.length} documento(s) relacionados`,
+      detail: docs.map((d) => `• ${d.title} (${d.createdAt.slice(0, 10)})`).join("\n"),
+      status: "info",
+      metadata: { library: docs.map((d) => d.id) },
+    });
+    return libraryPrompt(docs);
+  }
+
+  /** Al terminar: resumen de la misión (o el incidente, si falló) en la biblioteca. */
+  private documentMission(m: Mission): void {
+    // Una consulta rápida de un dato puntual no es conocimiento reutilizable (y puede tener datos de clientes).
+    if (m.taskKind === "data-lookup" && m.steps.every((s) => s.title === "Consulta rápida")) return;
+    const repos = m.repos.length ? m.repos.map((r) => r.repositoryId) : m.repositoryId === NO_REPO ? [] : [m.repositoryId];
+    const diff = repo.missionEvents(m.id).filter((e) => e.type === "GIT_DIFF").at(-1)?.detail ?? "";
+    const deliveries = m.repos.length
+      ? m.repos.filter((r) => r.branch).map((r) => `- ${r.repositoryId}: \`${r.branch}\` · commit ${r.commitSha?.slice(0, 7) ?? "—"}${r.pushed ? " (publicado)" : " (sin publicar)"}`)
+      : m.branch
+        ? [`- \`${m.branch}\` · commit ${m.commitSha?.slice(0, 7) ?? "—"}${m.pushed ? " (publicado)" : " (sin publicar)"}`]
+        : [];
+    const decisions = m.questions.filter((q) => q.status === "answered" && !q.key.startsWith("secret:"));
+    const team = [...new Set(m.steps.filter((s) => s.kind === "agent").map((s) => `${getAgent(s.agentId).name}${s.provider ? ` (${s.provider === "codex" ? "Codex" : "Claude Code"})` : ""}`))];
+    const failed = m.status === "failed";
+    const body = [
+      `**Pedido:** ${m.prompt}`,
+      repos.length ? `**Repositorio:** ${repos.join(" + ")} (base ${m.repos.length ? m.repos.map((r) => r.baseBranch).join(", ") : m.baseBranch})` : "**Sin repositorio** (análisis / datos)",
+      failed ? `**Qué falló:** ${m.error ?? "sin detalle"}` : `**Resultado:**\n${m.summary ?? "—"}`,
+      deliveries.length ? `**Entrega:**\n${deliveries.join("\n")}` : "",
+      m.ci?.length ? `**GitHub Actions:** ${m.ci.map((c) => `${c.repositoryId}: ${c.state}`).join(", ")}` : "",
+      m.checklist?.length ? `**Checklist:**\n${m.checklist.map((i) => `- ${i.status === "done" ? "✓" : i.status === "failed" ? "✗" : i.status === "skipped" ? "–" : "○"} ${i.text}`).join("\n")}` : "",
+      decisions.length ? `**Decisiones:**\n${decisions.map((q) => `- ${q.text} → ${q.answer}`).join("\n")}` : "",
+      diff ? `**Archivos cambiados:**\n\`\`\`\n${diff.slice(0, 3000)}\n\`\`\`` : "",
+      team.length ? `**Equipo:** ${team.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    this.document(m.id, "atlas", {
+      kind: failed ? "incidente" : "mision",
+      title: `${failed ? "Incidente" : "Misión"} #${m.id}: ${firstLine(m.prompt, 90)}`,
+      body,
+      repositoryId: repos[0] ?? null,
+      tags: [...repos, m.area, m.taskKind],
+      sourceKey: `mission:${m.id}`,
+    });
   }
 
   /** Guarda el estado de GitHub Actions de un repo en la misión (para la oficina y el informe). */
@@ -839,6 +912,16 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
     if (q.status !== "open") throw new MissionError(q.status === "answered" ? "Esa pregunta ya fue respondida" : "Esa pregunta ya no está vigente", 409);
     const next = this.updateQuestion(missionId, qid, { status: "answered", answer: text.slice(0, 4000), answeredAt: new Date().toISOString() })!;
     eventBus.publish({ missionId, agentId: q.agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(q.agentId).name}: ${firstLine(text, 80)}`, detail: text, status: "info", metadata: { chat: true, fromUser: true, answer: qid } });
+    // Las decisiones quedan en la biblioteca (las de secretos no: no son conocimiento reutilizable).
+    if (!q.key.startsWith("secret:"))
+      this.document(missionId, q.agentId, {
+        kind: "decision",
+        title: `Decisión: ${firstLine(q.text, 120)}`,
+        body: `**Pregunta** (${getAgent(q.agentId).name}, misión #${missionId}): ${q.text}\n\n**Respuesta:** ${next.answer}${q.options.length ? `\n\n**Opciones que había:** ${q.options.join(" · ")}` : ""}${q.context ? `\n\n**Contexto:**\n${q.context.slice(0, 1500)}` : ""}\n\n**Misión:** ${m.prompt}`,
+        repositoryId: m.repositoryId === NO_REPO ? null : m.repositoryId,
+        tags: [m.area, m.taskKind, q.kind],
+        sourceKey: `decision:${qid}`,
+      });
     // Si el servidor se reinició mientras tanto, la respuesta queda guardada y se usa al retomar.
     this.active.get(missionId)?.waiters.get(qid)?.(next.answer);
     return next;
@@ -1094,7 +1177,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     this.emit(id, "atlas", { provider, sessionId: null, type: "AGENT_STATUS", title: "Planificando la misión", status: "running", metadata: { visual: "THINKING" } });
     const ask = config.maxQuestionsPerStep > 0 ? `\nSi la misión es ambigua en algo que cambia el plan y solo el usuario puede decidirlo, en lugar del JSON responde SOLO "PREGUNTA: …" (y si aplica "OPCIONES: a | b"). No preguntes lo que puedes decidir tú o averiguar leyendo.` : "";
-    const prompt = `${buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi, this.lessonsText(mission))}${guideFor(mission.taskKind)}${ask}`;
+    const prompt = `${buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi, this.lessonsText(mission))}${this.libraryText(mission, "atlas", mission.prompt)}${guideFor(mission.taskKind)}${ask}`;
     const res = await this.runAgentAsking(id, "atlas", provider, wt, "read-only", prompt, "Planificar", rt, step);
     if (!res.ok) {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
@@ -1137,6 +1220,16 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
       if (step.writes && w) rt.lastWriter.set(w.cfg.id, step.agentId);
       const text = this.absorb(id, step.agentId, res.text, w?.cfg.id ?? "datos");
       this.setStep(id, step, { status: "done", result: text.slice(0, 20000), finishedAt: new Date().toISOString() });
+      // "Documentar": el informe de la tarea queda en la biblioteca (salvo una consulta rápida de un dato puntual).
+      if (step.kind === "agent" && step.title !== "Consulta rápida" && text.trim())
+        this.document(id, step.agentId, {
+          kind: step.writes ? "informe" : "investigacion",
+          title: `${step.title} — ${firstLine(mission.prompt, 60)}`,
+          body: `**Misión #${id}:** ${mission.prompt}\n**${getAgent(step.agentId).name}**${res.provider ? ` · ${res.provider === "codex" ? "Codex" : "Claude Code"}` : ""}${w ? ` · ${w.cfg.name}` : ""}\n\n**Tarea:** ${step.task}\n\n${text}`,
+          repositoryId: w?.cfg.id ?? null,
+          tags: [w?.cfg.id ?? "datos", mission.area, mission.taskKind],
+          sourceKey: `step:${step.id}`,
+        });
     } else {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
     }
@@ -1190,7 +1283,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${this.lessonsText(m)}${guideFor(m.taskKind)}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
+${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${this.lessonsText(m)}${this.libraryText(m, step.agentId, `${m.prompt}\n${step.title}\n${step.task}`)}${guideFor(m.taskKind)}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
 
 Tu tarea (${step.title}):
 ${step.task}

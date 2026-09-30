@@ -304,3 +304,15 @@ No se persisten API keys, OAuth tokens, contraseñas ni razonamiento.
   borra `worktrees/<misión>` (con `git worktree remove` + `prune`) y `runs/<misión>` de misiones terminadas hace más de
   `RETENTION_DAYS` días; conserva lo que tiene cambios sin commit o commits sin publicar. `usageMetrics()` →
   `GET /api/metrics/usage?days=N`: pasos, minutos, fallas, límites alcanzados (`engineSwitch`) y misiones por motor.
+
+## 17. Biblioteca y bandeja de decisiones
+
+* `src/server/library.ts` → tabla `library_docs` (office.db). `saveDoc()` es idempotente por `source_key`
+  (`step:<id>`, `mission:<id>`, `decision:<qid>`), así que retomar una misión no duplica documentos.
+* **Consultar:** `relatedDocs(texto)` puntúa por términos (título ×3, etiquetas ×2, cuerpo ×1; sin tildes), exige 2
+  coincidencias, prefiere el mismo repo, decisiones y manuales, y excluye la propia misión. `libraryPrompt()` agrega
+  extractos al plan de Atlas y a cada tarea; la oficina lo muestra como "Consultó la biblioteca".
+* **Documentar:** informe por paso de agente (`runStep`), decisión al responder (`answerQuestion`, salvo secretos) y
+  resumen o incidente al cerrar la misión (`closeMission`). Todo con texto que el equipo ya produjo: sin llamadas extra.
+* API: `GET /api/library?q=&kind=`, `GET/DELETE /api/library/:id`, `POST /api/library` (manual). WS `{kind:"library"}`.
+* Cliente: `LibraryWindow` (ventana flotante con `useFloating`) y `DecisionsInbox` (preguntas abiertas de todas las misiones).

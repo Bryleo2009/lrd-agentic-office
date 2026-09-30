@@ -291,6 +291,7 @@ export type WsServerMessage =
   | { kind: "session"; session: AgentSessionInfo }
   | { kind: "team"; team: AgentProfile[] }
   | { kind: "repositories"; repositories: RepositoryConfig[] }
+  | { kind: "library"; doc: Pick<LibraryDoc, "id" | "kind" | "title" | "missionId"> | null }
   | { kind: "chat"; agentId: AgentId; missionId: string | null; delta: string; done: boolean; error?: string };
 
 /** Lección aprendida por el equipo (memoria entre misiones). */
@@ -360,4 +361,30 @@ export interface CleanupReport {
   removed: { path: string; missionId: string | null; kind: "worktree" | "runs"; mb: number }[];
   kept: { path: string; reason: string }[];
   freedMb: number;
+}
+
+/** Tipos de documento de la biblioteca del equipo. */
+export type LibraryKind = "mision" | "informe" | "investigacion" | "decision" | "incidente" | "manual";
+
+export const LIBRARY_KIND_LABEL: Record<LibraryKind, string> = {
+  mision: "Misión",
+  informe: "Informe de tarea",
+  investigacion: "Investigación",
+  decision: "Decisión",
+  incidente: "Incidente",
+  manual: "Manual",
+};
+
+/** Documento de la biblioteca: lo que el equipo dejó documentado (se consulta antes de trabajar). */
+export interface LibraryDoc {
+  id: string;
+  kind: LibraryKind;
+  title: string;
+  body: string;
+  missionId: string | null;
+  agentId: AgentId | null;
+  repositoryId: string | null;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
 }

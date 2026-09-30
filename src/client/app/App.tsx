@@ -7,6 +7,8 @@ import { OfficeEngine } from "../office/OfficeEngine";
 import { BottomFeed } from "../panels/BottomFeed";
 import { MissionHud } from "../panels/MissionHud";
 import { ProgressTablet } from "../panels/ProgressTablet";
+import { LibraryWindow } from "../panels/LibraryWindow";
+import { DecisionsInbox, openDecisions } from "../panels/DecisionsInbox";
 import { NewMissionPanel } from "../panels/NewMissionPanel";
 import { SettingsPanel } from "../panels/SettingsPanel";
 import { TopBar } from "../panels/TopBar";
@@ -87,7 +89,13 @@ export function App() {
   // Informe pendiente: Atlas sale a saludar hasta que el usuario le hace clic.
   useEffect(() => {
     const list = pendingReports.map((id) => missions[id]).filter(Boolean);
-    document.title = list.length ? `(${list.length}) Informe listo · LRD Agentic Office` : "LRD Agentic Office";
+    // Primero lo que tiene una misión en pausa: decisiones que esperan tu respuesta.
+    const decisions = openDecisions(missions).length;
+    document.title = decisions
+      ? `(${decisions}) Decisión pendiente · LRD Agentic Office`
+      : list.length
+        ? `(${list.length}) Informe listo · LRD Agentic Office`
+        : "LRD Agentic Office";
     try {
       engine?.brain("atlas")?.setCalling(list.length ? callText(list) : null);
     } catch (e) {
@@ -152,6 +160,12 @@ export function App() {
       </ErrorBoundary>
       <ErrorBoundary name="la tablet de avance">
         <ProgressTablet onFocusAgent={focusAgent} onChat={(id) => useStore.getState().setChatWindow(id)} />
+      </ErrorBoundary>
+      <ErrorBoundary name="la biblioteca">
+        <LibraryWindow onOpenMission={(id) => useStore.getState().setTablet(true, id)} />
+      </ErrorBoundary>
+      <ErrorBoundary name="las decisiones">
+        <DecisionsInbox onOpenMission={(id) => useStore.getState().setTablet(true, id)} />
       </ErrorBoundary>
       <ErrorBoundary name="la actividad">
         <BottomFeed onAgent={focusAgent} />

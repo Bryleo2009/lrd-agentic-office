@@ -53,6 +53,9 @@ export function connectWs(): () => void {
         case "repositories":
           s.setRepositories(msg.repositories);
           break;
+        case "library":
+          s.bumpLibrary();
+          break;
         case "chat":
           if (msg.done) {
             s.setChatBusy(msg.agentId, false);

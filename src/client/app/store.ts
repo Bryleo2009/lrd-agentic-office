@@ -37,6 +37,10 @@ interface State {
   chatWindow: AgentId | null;
   /** Tablet de avance: ventana aparte con el progreso del equipo (misión elegida o la actual). */
   tablet: { open: boolean; missionId: string | null };
+  libraryOpen: boolean;
+  /** Sube cada vez que la biblioteca cambia (para recargar la lista si está abierta). */
+  libraryVersion: number;
+  inboxOpen: boolean;
 
   hydrate(s: Snapshot): void;
   addEvent(e: AgentRuntimeEvent): void;
@@ -57,6 +61,9 @@ interface State {
   setDrawerTab(t: State["drawerTab"]): void;
   setChatWindow(id: AgentId | null): void;
   setTablet(open: boolean, missionId?: string | null): void;
+  setLibraryOpen(v: boolean): void;
+  bumpLibrary(): void;
+  setInboxOpen(v: boolean): void;
 }
 
 const MAX_EVENTS = 600;
@@ -82,6 +89,9 @@ export const useStore = create<State>((set, get) => ({
   drawerTab: null,
   chatWindow: null,
   tablet: { open: false, missionId: null },
+  libraryOpen: false,
+  libraryVersion: 0,
+  inboxOpen: false,
 
   hydrate(s) {
     const missions: Record<string, Mission> = {};
@@ -135,6 +145,15 @@ export const useStore = create<State>((set, get) => ({
   },
   setDrawerTab(drawerTab) {
     set({ drawerTab });
+  },
+  setLibraryOpen(libraryOpen) {
+    set({ libraryOpen });
+  },
+  bumpLibrary() {
+    set({ libraryVersion: get().libraryVersion + 1 });
+  },
+  setInboxOpen(inboxOpen) {
+    set({ inboxOpen });
   },
   setTablet(open, missionId) {
     set({ tablet: { open, missionId: missionId === undefined ? get().tablet.missionId : missionId } });

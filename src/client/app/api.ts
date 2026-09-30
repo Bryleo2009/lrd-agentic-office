@@ -1,5 +1,5 @@
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, AgentProfile, CleanupReport, EngineChoice, Lesson, Mission, MissionQuestion, RepositoryConfig, RuntimeStatus, UsageMetrics } from "../../shared/types";
+import type { AgentId, AgentProfile, CleanupReport, EngineChoice, Lesson, LibraryDoc, LibraryKind, Mission, MissionQuestion, RepositoryConfig, RuntimeStatus, UsageMetrics } from "../../shared/types";
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -28,5 +28,9 @@ export const api = {
   usage: (days = 30) => req<UsageMetrics>(`/api/metrics/usage?days=${days}`),
   cleanup: (dryRun: boolean) => req<CleanupReport>("/api/maintenance/cleanup", { method: "POST", body: JSON.stringify({ dryRun }) }),
   setMcpHidden: (name: string, hidden: boolean) => req<RuntimeStatus[]>(`/api/mcp/${encodeURIComponent(name)}/hidden`, { method: "PUT", body: JSON.stringify({ hidden }) }),
+  library: (q: string, kind: LibraryKind | null) =>
+    req<{ docs: LibraryDoc[]; counts: Record<LibraryKind | "todo", number> }>(`/api/library?${new URLSearchParams({ ...(q ? { q } : {}), ...(kind ? { kind } : {}) })}`),
+  addLibraryDoc: (title: string, body: string) => req<LibraryDoc>("/api/library", { method: "POST", body: JSON.stringify({ title, body }) }),
+  deleteLibraryDoc: (id: string) => req<{ ok: boolean }>(`/api/library/${id}`, { method: "DELETE", body: "{}" }),
   runtime: (force = false) => req<RuntimeStatus[]>(`/api/runtime${force ? "?force=1" : ""}`),
 };

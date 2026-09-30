@@ -411,3 +411,27 @@ test("migraciones: sin tu aprobación el commit queda local y no se publica", { 
   assert.equal(m.pushed, false);
   assert.equal(git(["branch", "--list", m.branch!], back), "", "no llegó a GitHub");
 });
+
+test("biblioteca: la misión deja su resumen, los informes y tu decisión; la siguiente misión parecida los consulta", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const lib = await import("../src/server/library");
+  // La misión con pregunta de antes ya dejó documentos: resumen, informes de tarea y la decisión (IGV).
+  const docs = lib.searchLibrary({ q: "totales IGV" });
+  const kinds = new Set(docs.map((d) => d.kind));
+  assert.ok(kinds.has("mision") && kinds.has("informe") && kinds.has("decision"), [...kinds].join(","));
+  const decision = docs.find((d) => d.kind === "decision")!;
+  assert.match(decision.body, /IGV[\s\S]*Respuesta:\*\* Sin IGV/);
+  assert.ok(!lib.searchLibrary({ q: "AKIA" }).some((d) => d.kind === "decision"), "las alertas de secretos no se guardan como decisión");
+  const missionDoc = docs.find((d) => d.kind === "mision" && /PRUEBA_PREGUNTA/.test(d.body))!;
+  assert.match(missionDoc.body, /\*\*Entrega:\*\*[\s\S]*agentic\//);
+
+  process.env.FAKE_CALLS = path.join(root, "library-calls.log");
+  const m = await finished((await orchestrator.createMission({ prompt: "Implementa los totales con IGV en la API de reportes", repositoryId: "lrd-back", engine: "codex" })).id);
+  assert.equal(m.status, "done", m.error ?? "");
+  const calls = fs.readFileSync(process.env.FAKE_CALLS, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(calls.find((c) => c.kind === "plan")?.knowsLibrary, true, "Atlas consultó la biblioteca al planificar");
+  assert.ok(calls.some((c) => c.kind === "agent" && c.knowsLibrary), "los agentes también");
+  // No se consulta a sí misma, y no se duplican documentos al volver a guardar el mismo paso.
+  const again = lib.searchLibrary({ q: m.id });
+  assert.equal(again.filter((d) => d.title.startsWith(`Misión #${m.id}`)).length, 1);
+});

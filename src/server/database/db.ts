@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_events_agent ON runtime_events(agent_id, timestam
 CREATE TABLE IF NOT EXISTS handoffs (
   id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL,
   title TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS library_docs (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, mission_id TEXT, agent_id TEXT,
+  repository_id TEXT, source_key TEXT UNIQUE, tags TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_library_created ON library_docs(created_at);
 CREATE TABLE IF NOT EXISTS deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
   detail TEXT, created_at TEXT NOT NULL);

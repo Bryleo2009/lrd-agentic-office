@@ -205,3 +205,19 @@ test("servidores MCP ocultos: se guardan en los ajustes y se pueden volver a mos
   assert.deepEqual(S.setMcpHidden("lrd", false), ["cua_repl"]);
   assert.deepEqual(S.hiddenMcp(), ["cua_repl"]);
 });
+
+test("biblioteca: guarda sin duplicar, busca sin tildes y trae lo relacionado", async () => {
+  const lib = await import("../src/server/library");
+  const a = lib.saveDoc({ kind: "manual", title: "Cómo se numeran las órdenes", body: "numero_orden lleva prefijo ORD-XXXX- y se busca con LIKE en cabecera_ordens", sourceKey: "t:1", repositoryId: "lrd-back" });
+  const a2 = lib.saveDoc({ kind: "manual", title: "Cómo se numeran las órdenes (v2)", body: "numero_orden lleva prefijo ORD-XXXX-; buscar siempre con LIKE en cabecera_ordens", sourceKey: "t:1" });
+  assert.equal(a2.id, a.id, "misma clave de origen: se actualiza");
+  lib.saveDoc({ kind: "informe", title: "Filtro de origen en el front", body: "Se agregó un filtro por canal en la consola", missionId: "M1", repositoryId: "lrd-front" });
+  assert.equal(lib.searchLibrary({ q: "ordenes" })[0].id, a.id, "sin tildes");
+  assert.equal(lib.searchLibrary({ q: "", kind: "informe" }).length, 1);
+  const rel = lib.relatedDocs("Busca la orden en cabecera_ordens por numero_orden", { repoIds: ["lrd-back"] });
+  assert.equal(rel[0]?.id, a.id);
+  assert.equal(lib.relatedDocs("Filtro de origen por canal", { excludeMissionId: "M1" }).length, 0, "no se consulta la propia misión");
+  assert.match(lib.libraryPrompt(rel), /Documentación del equipo relacionada[\s\S]*\[Manual\] Cómo se numeran las órdenes \(v2\)/);
+  assert.equal(lib.libraryCounts().manual, 1);
+  assert.equal(lib.deleteDoc(a.id), true);
+});

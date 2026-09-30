@@ -1050,6 +1050,12 @@ code {
 }
 
 /* ---------- responsive ---------- */
+/* Con muchos botones arriba: por debajo de 1600px quedan solo con ícono (el título dice qué son). */
+@media (max-width: 1600px) {
+  .top-actions .hide-md {
+    display: none;
+  }
+}
 @media (max-width: 1100px) {
   .engines {
     top: auto;
@@ -2123,6 +2129,231 @@ label.check input {
     max-height: none;
     border-radius: 0;
     border-width: 0;
+    resize: none;
+  }
+}
+
+/* ---------------------------------------------------------------- Biblioteca */
+.library {
+  position: fixed;
+  left: 50%;
+  top: 118px;
+  transform: none;
+  margin-left: -300px;
+  width: 600px;
+  height: min(680px, calc(100vh - 100px));
+  min-width: 340px;
+  min-height: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 70px);
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: rgba(10, 16, 30, 0.97);
+  overflow: hidden;
+  resize: both;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.library[style*="left"] {
+  margin-left: 0;
+}
+.lib-mark {
+  font-size: 18px;
+}
+.lib-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  overflow: auto;
+}
+.lib-search {
+  width: 100%;
+}
+.lib-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lib-kinds .chip:disabled {
+  opacity: 0.45;
+}
+.lib-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lib-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  background: rgba(148, 163, 184, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+.lib-item:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.lib-item .grow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lib-icon {
+  font-size: 16px;
+  line-height: 1.3;
+}
+.lib-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.lib-new {
+  margin-left: 6px;
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--ok);
+  vertical-align: middle;
+}
+.lib-add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+}
+.lib-doc h3 {
+  margin: 8px 0 2px;
+  font-size: 15px;
+}
+.lib-doc-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.lib-doc-body {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 100%;
+}
+
+/* ---------------------------------------------------------------- Bandeja de decisiones */
+.btn.has-badge {
+  border-color: rgba(251, 191, 36, 0.6);
+}
+.badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--warn);
+  color: #1a1206;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-grid;
+  place-items: center;
+  animation: tp-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge {
+    animation: none;
+  }
+}
+.inbox {
+  position: fixed;
+  right: 16px;
+  top: 70px;
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 90px);
+  z-index: 23;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: rgba(10, 16, 30, 0.97);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.inbox-head .grow {
+  display: flex;
+  flex-direction: column;
+}
+.inbox-body {
+  overflow: auto;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.inbox-mission {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-mission:hover {
+  color: var(--accent);
+}
+.inbox-sep {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.inbox-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.inbox-recent li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+@media (max-width: 760px) {
+  .library,
+  .inbox {
+    left: 0 !important;
+    top: 0 !important;
+    right: auto;
+    margin-left: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
     resize: none;
   }
 }

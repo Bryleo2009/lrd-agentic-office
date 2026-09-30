@@ -110,6 +110,22 @@ Si tienes un servidor MCP configurado en Codex (`codex mcp list`) o Claude Code 
 Sin esa marca los MCP se desactivan para la misión. Con ella, los agentes reciben reglas estrictas: sólo lecturas, con límites,
 sin exponer datos personales y citando la consulta usada. **Recomendación:** que el MCP de producción use un usuario de BD de solo lectura.
 
+### Biblioteca (botón 📚 arriba)
+
+Todo lo que el equipo deja documentado, buscable (sin importar tildes) y filtrable por tipo: **Misión** (resumen,
+entrega, checklist, decisiones y archivos cambiados), **Informe de tarea** / **Investigación** (lo que hizo cada agente),
+**Decisión** (cada pregunta o aprobación que respondiste), **Incidente** (misiones que fallaron) y **Manual** (los que
+agregas tú con *+ Manual*). Cada misión sigue el ciclo **consultar → trabajar → documentar**: antes de planificar y de
+cada tarea, Atlas y los agentes reciben los documentos relacionados (se ve como "Consultó la biblioteca…"), y al
+terminar queda todo documentado. Se guarda en `office.db` (la limpieza de carpetas no la borra) y no gasta llamadas
+extra al motor. Las consultas rápidas de un dato puntual no se documentan (no son reutilizables y pueden tener datos
+de clientes). Puedes *Olvidar* cualquier documento.
+
+### Decisiones (bandeja arriba, con contador)
+
+Todas las preguntas y aprobaciones abiertas de todas las misiones en un solo lugar, para responderlas ahí mismo, y
+debajo lo que decidiste hace poco. La pestaña del navegador muestra `(n) Decisión pendiente` mientras haya alguna.
+
 ### Tablet de avance (botón *Avance* arriba, o *Ver avance* en la tarjeta de la misión)
 
 Ventana aparte, como el chat (se mueve arrastrando el encabezado y se agranda desde la esquina; en el celular ocupa la

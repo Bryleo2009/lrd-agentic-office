@@ -16,6 +16,8 @@ import { addLesson, deleteLesson, listLessons, purgeMisreadToolLessons } from ".
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
 import { cleanupOld } from "./maintenance";
+import { deleteDoc, getDoc, libraryCounts, saveDoc, searchLibrary } from "./library";
+import type { LibraryKind } from "../shared/types";
 import { usageMetrics } from "./metrics";
 import { repositoriesWithLocal, resetProfile, setMcpHidden, setRepoPath, team, updateProfile } from "./settings";
 
@@ -76,6 +78,27 @@ app.put("/api/mcp/:name/hidden", async (req) => {
   const rt = runtime.snapshot();
   eventBus.broadcast({ kind: "runtime", runtime: rt });
   return rt;
+});
+
+// ---------------- biblioteca del equipo ----------------
+const LIB_KINDS = ["mision", "informe", "investigacion", "decision", "incidente", "manual"];
+app.get("/api/library", async (req) => {
+  const { q, kind } = req.query as { q?: string; kind?: string };
+  const k = kind && LIB_KINDS.includes(kind) ? (kind as LibraryKind) : null;
+  return { docs: searchLibrary({ q: q?.slice(0, 200), kind: k }), counts: libraryCounts() };
+});
+app.get("/api/library/:id", async (req, reply) => getDoc((req.params as { id: string }).id) ?? reply.status(404).send({ error: "Documento no encontrado" }));
+app.post("/api/library", async (req) => {
+  const b = (req.body ?? {}) as { title?: string; body?: string };
+  if (!b.title?.trim() || !b.body?.trim()) throw new MissionError("El documento necesita título y contenido");
+  const doc = saveDoc({ kind: "manual", title: b.title, body: b.body, tags: ["manual"] });
+  eventBus.broadcast({ kind: "library", doc: { id: doc.id, kind: doc.kind, title: doc.title, missionId: null } });
+  return doc;
+});
+app.delete("/api/library/:id", async (req) => {
+  const ok = deleteDoc((req.params as { id: string }).id);
+  if (ok) eventBus.broadcast({ kind: "library", doc: null });
+  return { ok };
 });
 
 app.get("/api/missions", async () => repo.listMissions(50));
