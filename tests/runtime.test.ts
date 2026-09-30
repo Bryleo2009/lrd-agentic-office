@@ -201,3 +201,40 @@ test("config.toml de Codex: distingue MCP propios de los aportados por plugins",
   assert.equal(pluginForServer("lrd", cfg), "lrd-connector@personal");
   assert.equal(pluginForServer("rappi", cfg), null);
 });
+
+test("planificador multi-repo: cada paso queda en su repo y 'front y back' elige ambos", () => {
+  const back = { ...repo, id: "lrd-back", kind: "backend" as const };
+  const front = { ...repo, id: "lrd-front", name: "lrd-front", shortName: "front", kind: "frontend" as const };
+  const plan = parsePlan(
+    JSON.stringify({ deliverable: "code_change", steps: [
+      { id: "s1", agent: "diego", title: "API", task: "x", dependsOn: [], writes: true, repo: "lrd-back" },
+      { id: "s2", agent: "mica", title: "UI", task: "x", dependsOn: [], writes: true },
+    ] }),
+    "Implementa el endpoint y la pantalla",
+    [back, front],
+  );
+  assert.deepEqual(plan?.steps.map((s) => s.repo), ["lrd-back", "lrd-front"]);
+  const rules = rulesPlan("Implementa el endpoint y la pantalla", back, "backend", [back, front]);
+  assert.deepEqual(rules.steps.map((s) => [s.agent, s.repo, s.dependsOn.length]), [["diego", "lrd-back", 0], ["mica", "lrd-front", 0]]);
+  assert.equal(inferRepo("agrega el campo en la api y muéstralo en la pantalla", [back, front], false).id, "lrd-back+lrd-front");
+});
+
+test("DAG: pasos que editan repos distintos corren en paralelo; en el mismo repo, de a uno", async () => {
+  const mk = (id: string, repositoryId: string): MissionStep => ({ id, missionId: "M", agentId: "diego", title: id, task: "", dependsOn: [], writes: true, kind: "agent", status: "pending", provider: null, sessionId: null, result: null, error: null, startedAt: null, finishedAt: null, repositoryId });
+  const steps = [mk("a", "back"), mk("b", "front"), mk("c", "back")];
+  const spans: Record<string, [number, number]> = {};
+  const dag = new MissionDagExecutor(steps, {
+    isCancelled: () => false,
+    onSkip: () => undefined,
+    run: async (s) => {
+      const t0 = Date.now();
+      await new Promise((r) => setTimeout(r, 120));
+      spans[s.id] = [t0, Date.now()];
+      s.status = "done";
+    },
+  });
+  await dag.execute();
+  const overlap = (x: string, y: string) => spans[x][0] < spans[y][1] && spans[y][0] < spans[x][1];
+  assert.ok(overlap("a", "b"), "back y front a la vez");
+  assert.ok(!overlap("a", "c"), "dos ediciones del mismo repo no se pisan");
+});

@@ -11,6 +11,17 @@ export interface QaPlan {
   note: string | null;
 }
 
+function hasParatest(wt: string): boolean {
+  for (const f of ["composer.json", "composer.lock"]) {
+    try {
+      if (fs.readFileSync(path.join(wt, f), "utf8").includes("brianium/paratest")) return true;
+    } catch {
+      /* no existe */
+    }
+  }
+  return false;
+}
+
 /** Detecta comandos reales de QA para el worktree. */
 export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
   const setup: string[] = [];
@@ -40,7 +51,8 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
       /* package.json inválido: se reportará al correr */
     }
   }
-  if (fs.existsSync(path.join(wt, "artisan"))) commands.push("php artisan test");
+  // Con ParaTest instalado, Laravel reparte las pruebas en varios procesos (cada uno con su propia BD de prueba).
+  if (fs.existsSync(path.join(wt, "artisan"))) commands.push(hasParatest(wt) ? "php artisan test --parallel" : "php artisan test");
   else if (fs.existsSync(path.join(wt, "vendor", "bin", "phpunit")) || fs.existsSync(path.join(wt, "phpunit.xml"))) commands.push("vendor/bin/phpunit");
   return { setup, commands, note: commands.length ? null : "No se detectaron comandos de build/test en el repositorio" };
 }

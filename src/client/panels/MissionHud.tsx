@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { agentOf as getAgent } from "../app/team";
 import { api } from "../app/api";
-import { isLive, MISSION_STATUS, STEP_STATUS } from "../app/format";
+import { branchesOf, isLive, MISSION_STATUS, repoLabel, STEP_STATUS } from "../app/format";
 import { useStore } from "../app/store";
 
 /** Tarjeta flotante compacta de la misión actual (no es un dashboard). */
@@ -42,14 +42,19 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
             })}
           </div>
           <div className="hud-meta">
-            <span title={current.worktree ?? ""}>
-              <code>{current.branch}</code>
-            </span>
-            {current.commitSha && (
-              <span>
-                commit <code>{current.commitSha.slice(0, 7)}</code>
+            {current.repos?.length > 1 && <span>{repoLabel(current)} · en paralelo</span>}
+            {branchesOf(current).map((b) => (
+              <span key={b.branch + (b.repo ?? "")} title={current.worktree ?? ""}>
+                {b.repo ? `${b.repo}: ` : ""}
+                <code>{b.branch}</code>
+                {b.sha && (
+                  <>
+                    {" "}
+                    commit <code>{b.sha.slice(0, 7)}</code>
+                  </>
+                )}
               </span>
-            )}
+            ))}
             {current.prUrl && (
               <a href={current.prUrl} target="_blank" rel="noreferrer">
                 Ver PR

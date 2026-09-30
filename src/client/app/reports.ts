@@ -98,7 +98,16 @@ export function buildReport(m: Mission): string {
   if (body) out.push(body.length > 3500 ? `${body.slice(0, 3500)}…` : body, "");
   if (team.length) out.push(`Trabajamos en esto: ${team.join(", ")}.`);
 
-  if (m.commitSha && m.branch) {
+  const delivered = (m.repos ?? []).filter((r) => r.commitSha && r.branch);
+  if (m.repos?.length > 1) {
+    if (delivered.length) {
+      out.push("Entrega (back y front trabajaron en paralelo):");
+      for (const r of delivered)
+        out.push(`• ${r.repositoryId}: commit ${r.commitSha!.slice(0, 7)} ${r.pushed ? `publicado en \`${r.branch}\`` : `en la rama local \`${r.branch}\` (sin publicar)`}${r.prUrl ? ` · PR: ${r.prUrl}` : ""}`);
+      const idle = m.repos.filter((r) => !r.commitSha).map((r) => r.repositoryId);
+      if (idle.length) out.push(`• ${idle.join(", ")}: sin cambios.`);
+    } else out.push("Entrega: fue un análisis, no hubo cambios de código ni ramas nuevas.");
+  } else if (m.commitSha && m.branch) {
     const where = m.pushed ? `publicada en la rama \`${m.branch}\` para que la revises` : `en la rama local \`${m.branch}\` (sin publicar)`;
     out.push(`Entrega: commit ${m.commitSha.slice(0, 7)} ${where}.${m.prUrl ? ` PR: ${m.prUrl}` : ""}`);
   } else if (m.repositoryId !== NO_REPO) {

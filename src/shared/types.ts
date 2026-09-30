@@ -105,7 +105,23 @@ export interface MissionStep {
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  /** Repositorio en el que trabaja el paso (misiones con varios repos). null = el principal. */
+  repositoryId?: string | null;
 }
+
+/** Estado de cada repositorio en una misión con varios repos (p. ej. back + front en paralelo). */
+export interface MissionRepo {
+  repositoryId: string;
+  baseBranch: string;
+  worktree: string | null;
+  branch: string | null;
+  commitSha: string | null;
+  pushed: boolean;
+  prUrl: string | null;
+}
+
+/** Separador para pedir varios repos en una misión: "lrd-back+lrd-front". */
+export const MULTI_REPO_SEP = "+";
 
 /** Misión sin repositorio (análisis / datos). */
 export const NO_REPO = "none";
@@ -134,6 +150,8 @@ export interface Mission {
   prUrl: string | null;
   summary: string | null;
   planSource: "ai" | "rules" | null;
+  /** Misión con varios repositorios: estado de cada uno (el primero es el principal). Vacío = un solo repo. */
+  repos: MissionRepo[];
   createdAt: string;
   updatedAt: string;
   steps: MissionStep[];

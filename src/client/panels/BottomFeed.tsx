@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { agentOf as getAgent } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId } from "../../shared/types";
-import { eventTone, MISSION_STATUS, timeOf, typeLabel } from "../app/format";
+import { branchesOf, eventTone, MISSION_STATUS, repoLabel, timeOf, typeLabel } from "../app/format";
 import { useStore } from "../app/store";
 
 const HIDDEN = new Set(["COMMAND_OUTPUT", "TEST_OUTPUT", "SESSION_STARTED", "AGENT_JOINED_MEETING"]);
@@ -85,8 +85,13 @@ export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
                     <span className={`status-pill ${m.status}`}>{MISSION_STATUS[m.status]}</span>
                     <b>#{m.id}</b>
                     <span className="grow">{m.prompt}</span>
-                    <code>{m.branch}</code>
-                    {m.commitSha && <code>{m.commitSha.slice(0, 7)}</code>}
+                    {m.repos?.length > 1 && <span className="muted">{repoLabel(m)}</span>}
+                    {branchesOf(m).map((b) => (
+                      <code key={b.branch + (b.repo ?? "")} title={b.repo ?? ""}>
+                        {b.branch}
+                        {b.sha ? ` · ${b.sha.slice(0, 7)}` : ""}
+                      </code>
+                    ))}
                     <span className="muted">{m.steps.filter((s) => s.kind === "agent").map((s) => getAgent(s.agentId).name).join(" · ")}</span>
                   </div>
                 );

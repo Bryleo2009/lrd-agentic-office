@@ -39,6 +39,7 @@ export const missions = sqliteTable("missions", {
   prUrl: text("pr_url"),
   summary: text("summary"),
   planSource: text("plan_source"),
+  repos: text("repos").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -60,6 +61,7 @@ export const missionSteps = sqliteTable("mission_steps", {
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
   position: integer("position").notNull().default(0),
+  repositoryId: text("repository_id"),
 });
 
 export const agentSessions = sqliteTable("agent_sessions", {

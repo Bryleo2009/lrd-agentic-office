@@ -61,7 +61,7 @@ export class MissionVisualController {
       const st = m?.status;
       const state = !m ? "idle" : st === "done" ? "done" : st === "failed" || st === "cancelled" ? "failed" : "running";
       const lines = m
-        ? [`MISIÓN ${m.id} · ${st?.toUpperCase()}`, m.prompt, `${m.repositoryId} · ${m.branch ?? m.baseBranch}`, `motor ${m.provider === "codex" ? "Codex CLI" : "Claude Code"}`, ...this.lastEventTitle.slice(-2)]
+        ? [`MISIÓN ${m.id} · ${st?.toUpperCase()}`, m.prompt, `${m.repos?.length > 1 ? m.repos.map((r) => r.repositoryId).join(" + ") : m.repositoryId} · ${m.branch ?? m.baseBranch}`, `motor ${m.provider === "codex" ? "Codex CLI" : "Claude Code"}`, ...this.lastEventTitle.slice(-2)]
         : ["Sin misiones activas", "La oficina está en modo ambiental", "", "", "", ""];
       this.engine.scene.missionScreen.setLines(lines, state);
     }, 400);

@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+// Codex falso "de equipo": planifica back + front en paralelo, edita archivos y responde.
+import fs from "node:fs";
+import path from "node:path";
+const a = process.argv.slice(2);
+const has = (s) => a.includes(s);
+if (has("--version")) { console.log("codex-cli 0.159.2"); process.exit(0); }
+if (a[0] === "exec" && has("--help")) { console.log("--json --cd --sandbox --skip-git-repo-check --color resume  If not provided as an argument (or if `-` is used), instructions are read from stdin"); process.exit(0); }
+if (a[0] === "login") { console.log("Logged in using ChatGPT"); process.exit(0); }
+if (a[0] === "mcp") { console.log("[]"); process.exit(0); }
+if (a[0] !== "exec") process.exit(0);
+
+let input = "";
+process.stdin.on("data", (d) => (input += d));
+process.stdin.on("end", () => {
+  const say = (text) => {
+    console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
+    console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text } }));
+    console.log(JSON.stringify({ type: "turn.completed", usage: {} }));
+  };
+  if (input.includes("SOLO planificar")) {
+    const plan = { deliverable: "code_change", steps: [
+      { id: "s1", agent: "diego", title: "Endpoint de totales", task: "Agregar endpoint GET /api/totales", dependsOn: [], writes: true, repo: "lrd-back" },
+      { id: "s2", agent: "mica", title: "Pantalla de totales", task: "Mostrar totales de GET /api/totales", dependsOn: [], writes: true, repo: "lrd-front" },
+    ] };
+    return say("```json\n" + JSON.stringify(plan) + "\n```");
+  }
+  if (input.includes("Puedes modificar archivos")) {
+    const who = input.includes("Pantalla de totales") ? "front" : "back";
+    const t0 = Date.now();
+    setTimeout(() => {
+      fs.writeFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who}\n`);
+      fs.appendFileSync(process.env.FAKE_TIMELINE, JSON.stringify({ who, start: t0, end: Date.now(), cwd: process.cwd() }) + "\n");
+      say(`Listo en ${who}.\nRESUMEN: cambio aplicado en ${who}`);
+    }, 1500);
+    return;
+  }
+  say("Revisé los cambios de ambos repositorios; todo coherente.\nRESUMEN: back y front listos");
+});

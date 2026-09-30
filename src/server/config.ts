@@ -48,6 +48,8 @@ export const config = {
   agentEngines: parseAgentEngines(env.AGENT_ENGINES),
   atlasReviewEnabled: bool(env.ATLAS_REVIEW_ENABLED, true),
   qaFixIterations: Math.max(0, Number(env.QA_FIX_ITERATIONS ?? 1)),
+  /** Comandos de QA a la vez (build, lint, pruebas). 1 = en serie. */
+  qaParallel: Math.max(1, Number(env.QA_PARALLEL ?? 3)),
   /** Pausa (ms) tras handoffs/reuniones para que la oficina alcance a representarlos. 0 = sin pausa. */
   visualPacingMs: Math.max(0, Number(env.VISUAL_PACING_MS ?? 4000)),
   stepTimeoutMs: Math.max(1, Number(env.AGENT_STEP_TIMEOUT_MIN ?? 30)) * 60_000,

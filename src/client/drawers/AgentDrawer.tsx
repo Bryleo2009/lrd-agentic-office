@@ -3,7 +3,7 @@ import { agentOf as getAgent, useAgentProfile } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId, EngineChoice, Provider } from "../../shared/types";
 import { api } from "../app/api";
-import { eventTone, isLive, timeOf } from "../app/format";
+import { branchesOf, eventTone, isLive, repoLabel, timeOf } from "../app/format";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
 import { EventRow } from "../panels/BottomFeed";
@@ -138,9 +138,9 @@ function AgentFacts({ agentId }: { agentId: AgentId }) {
     ],
     ["Session", session?.sessionId ? <code title={session.sessionId}>{session.sessionId.slice(0, 13)}…</code> : "—"],
     ["Misión", mission ? <>#{mission.id} {isLive(mission.status) ? "· en curso" : `· ${mission.status}`}</> : "—"],
-    ["Repositorio", mission ? (mission.repositoryId === "none" ? "Sin repositorio (datos)" : `${mission.repositoryId}${mission.repoSelection === "auto" ? " (auto)" : ""}`) : "—"],
+    ["Repositorio", mission ? (mission.repositoryId === "none" ? "Sin repositorio (datos)" : `${repoLabel(mission)}${mission.repoSelection === "auto" ? " (auto)" : ""}`) : "—"],
     ["Rama base", mission?.baseBranch || "—"],
-    ["Rama agentic", mission?.branch ? <code>{mission.branch}</code> : "—"],
+    ["Rama agentic", mission && branchesOf(mission).length ? branchesOf(mission).map((b) => <code key={b.branch + (b.repo ?? "")}>{b.repo ? `${b.repo}: ` : ""}{b.branch}</code>) : "—"],
     ["Worktree", mission?.worktree ? <code title={mission.worktree}>…{mission.worktree.slice(-34)}</code> : "—"],
     ["Actividad actual", step?.status === "running" ? step.title : lastEv ? `${lastEv.title} (${timeOf(lastEv.timestamp)})` : "Vida ambiental"],
   ];

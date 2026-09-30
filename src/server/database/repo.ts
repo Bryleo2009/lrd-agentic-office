@@ -17,12 +17,15 @@ function safeList(v: unknown): string[] {
 // ---------- missions ----------
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
-  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []) }).run();
+  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []) }).run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  const { mcpServers, ...rest } = patch;
-  db.update(schema.missions).set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), updatedAt: now() }).where(eq(schema.missions.id, id)).run();
+  const { mcpServers, repos, ...rest } = patch;
+  db.update(schema.missions)
+    .set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), ...(repos ? { repos: JSON.stringify(repos) } : {}), updatedAt: now() })
+    .where(eq(schema.missions.id, id))
+    .run();
 }
 
 function rowToStep(r: typeof schema.missionSteps.$inferSelect): MissionStep {
@@ -42,7 +45,17 @@ function rowToStep(r: typeof schema.missionSteps.$inferSelect): MissionStep {
     error: r.error,
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,
+    repositoryId: r.repositoryId ?? null,
   };
+}
+
+function safeRepos(v: string | null | undefined): Mission["repos"] {
+  try {
+    const a = JSON.parse(v ?? "[]");
+    return Array.isArray(a) ? a : [];
+  } catch {
+    return [];
+  }
 }
 
 export function getMission(id: string): Mission | null {
@@ -55,7 +68,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {

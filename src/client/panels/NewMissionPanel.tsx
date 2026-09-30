@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { isToolMcp, type EngineChoice } from "../../shared/types";
+import { isToolMcp, MULTI_REPO_SEP, type EngineChoice } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 
@@ -26,10 +26,18 @@ export function NewMissionPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const repo = enabled.find((r) => r.id === repoId);
+  // Combinaciones back + front: ambos equipos trabajan a la vez, cada uno en su repo.
+  const combos = useMemo(
+    () => enabled.filter((r) => r.kind === "backend").flatMap((b) => enabled.filter((r) => r.kind === "frontend").map((f) => ({ id: `${b.id}${MULTI_REPO_SEP}${f.id}`, label: `${b.name} + ${f.name}` }))),
+    [enabled],
+  );
+  const chosen = repoId.split(MULTI_REPO_SEP).map((id) => enabled.find((r) => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r);
+  const repo = chosen.length === 1 ? chosen[0] : undefined;
+  const multi = chosen.length > 1;
+  const bases = chosen.length ? chosen.map((r) => r.allowedBases).reduce((a, b) => a.filter((x) => b.includes(x))) : [];
   useEffect(() => {
-    if (base && (!repo || !repo.allowedBases.includes(base))) setBase("");
-  }, [repo, base]);
+    if (base && !bases.includes(base)) setBase("");
+  }, [bases.join("|"), base]);
   const effEngine = engine === "auto" ? config?.aiEngineDefault ?? "codex" : engine;
   const mcp = runtime.find((r) => r.provider === effEngine)?.mcpServers.filter((m) => m.enabled) ?? [];
   useEffect(() => {
@@ -110,14 +118,19 @@ export function NewMissionPanel() {
                   {r.localPath ? " · tu clon" : ""}
                 </option>
               ))}
+              {combos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
               <option value="none">Sin repo (análisis / datos)</option>
             </select>
           </label>
           <label>
             <span>Rama base</span>
             <select value={base} onChange={(e) => setBase(e.target.value)} disabled={repoId === "none"}>
-              <option value="">{repo ? `Por defecto (${repo.defaultBase})` : repoId === "none" ? "No aplica" : "Por defecto del repo"}</option>
-              {repo?.allowedBases.map((b) => (
+              <option value="">{repo ? `Por defecto (${repo.defaultBase})` : multi ? "Por defecto de cada repo" : repoId === "none" ? "No aplica" : "Por defecto del repo"}</option>
+              {bases.map((b) => (
                 <option key={b} value={b}>
                   {b}
                 </option>
@@ -159,6 +172,8 @@ export function NewMissionPanel() {
           {repoId === "auto" && <>Repositorio y rama son opcionales: si los dejas en automático, Atlas elige según la misión (o trabaja sin repo si es de datos). </>}
           {repoId === "none"
             ? "Sin repositorio: nadie modifica código; el equipo analiza y responde. "
+            : multi
+            ? <>El equipo de back y el de front trabajan <b>a la vez</b>, cada uno en su propia copia de <code>{base || "la rama por defecto de cada repo"}</code>. QA prueba cada repo en paralelo y, si hay cambios, se publica una rama <code>agentic/…</code> en cada repositorio para evaluación. </>
             : <>Los agentes trabajan en un worktree aislado de <code>{base || repo?.defaultBase || "la rama por defecto"}</code>, sin crear ramas. Solo si hay cambios se crea una rama nueva <code>agentic/…</code> y se publica para evaluación (escribe "no publiques" o "directo en la rama base" para cambiarlo). La rama base nunca se modifica. </>}
           Push {config?.githubPushEnabled ? "habilitado" : "deshabilitado"} · PR {config?.githubPrEnabled ? "habilitado" : "deshabilitado"}.
         </div>

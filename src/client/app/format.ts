@@ -1,5 +1,5 @@
 import type { AgentRuntimeEvent, EventType } from "../../shared/events";
-import type { MissionStatus, StepStatus } from "../../shared/types";
+import type { Mission, MissionStatus, StepStatus } from "../../shared/types";
 
 export function timeOf(iso: string): string {
   const d = new Date(iso);
@@ -81,4 +81,15 @@ export const STEP_STATUS: Record<StepStatus, string> = {
 
 export function isLive(s: MissionStatus): boolean {
   return ["created", "preparing", "planning", "running", "qa", "committing"].includes(s);
+}
+
+/** Repositorio(s) de la misión para mostrar: "lrd-back + lrd-front" en misiones de varios repos. */
+export function repoLabel(m: Mission): string {
+  return m.repos?.length > 1 ? m.repos.map((r) => r.repositoryId).join(" + ") : m.repositoryId;
+}
+
+/** Ramas entregadas: una por repo en misiones de varios repos. */
+export function branchesOf(m: Mission): { repo: string | null; branch: string; sha: string | null }[] {
+  if (m.repos?.length > 1) return m.repos.filter((r) => r.branch).map((r) => ({ repo: r.repositoryId, branch: r.branch!, sha: r.commitSha }));
+  return m.branch ? [{ repo: null, branch: m.branch, sha: m.commitSha }] : [];
 }

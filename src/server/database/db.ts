@@ -48,6 +48,9 @@ const cols = (sqlite.prepare("PRAGMA table_info(missions)").all() as { name: str
 if (!cols.includes("repo_selection")) sqlite.exec("ALTER TABLE missions ADD COLUMN repo_selection TEXT NOT NULL DEFAULT 'manual'");
 if (!cols.includes("mcp_servers")) sqlite.exec("ALTER TABLE missions ADD COLUMN mcp_servers TEXT NOT NULL DEFAULT '[]'");
 if (!cols.includes("allow_mcp")) sqlite.exec("ALTER TABLE missions ADD COLUMN allow_mcp INTEGER NOT NULL DEFAULT 0");
+if (!cols.includes("repos")) sqlite.exec("ALTER TABLE missions ADD COLUMN repos TEXT NOT NULL DEFAULT '[]'");
+const stepCols = (sqlite.prepare("PRAGMA table_info(mission_steps)").all() as { name: string }[]).map((c) => c.name);
+if (!stepCols.includes("repository_id")) sqlite.exec("ALTER TABLE mission_steps ADD COLUMN repository_id TEXT");
 
 // Misiones que quedaron a medias por un reinicio del servidor: se marcan como fallidas (error real, no éxito).
 sqlite

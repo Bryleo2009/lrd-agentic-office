@@ -8,17 +8,18 @@ export interface DagCallbacks {
 
 /**
  * Ejecuta los pasos respetando dependencias. Los nodos independientes corren en paralelo.
- * Los nodos `writes` se serializan con un mutex (un solo agente edita el worktree a la vez).
+ * Los nodos `writes` se serializan con un mutex POR REPOSITORIO: un solo agente edita cada worktree
+ * a la vez, pero back y front (worktrees distintos) se editan en paralelo.
  */
 export class MissionDagExecutor {
-  private writeLock: Promise<void> = Promise.resolve();
+  private writeLocks = new Map<string, Promise<void>>();
 
   constructor(private steps: MissionStep[], private cb: DagCallbacks) {}
 
-  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = this.writeLock;
+  private withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeLocks.get(key) ?? Promise.resolve();
     let release!: () => void;
-    this.writeLock = new Promise<void>((r) => (release = r));
+    this.writeLocks.set(key, new Promise<void>((r) => (release = r)));
     return prev.then(fn).finally(() => release());
   }
 
@@ -47,7 +48,7 @@ export class MissionDagExecutor {
         }
       }
       for (const s of ready()) {
-        const p = (s.writes ? this.withWriteLock(() => this.cb.run(s)) : this.cb.run(s))
+        const p = (s.writes ? this.withWriteLock(s.repositoryId ?? "", () => this.cb.run(s)) : this.cb.run(s))
           .then(() => {
             if (s.status === "done") done.add(s.id);
             else if (s.status === "failed") failed.push(s);

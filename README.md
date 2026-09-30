@@ -51,6 +51,8 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
 1. Abre la oficina. Los 8 agentes viven aunque no haya misión.
 2. **Nueva misión**: escribe el pedido y elige *Repositorio*, *Rama base* (por defecto `release/fase2`) y *Motor IA* (Automático / Codex / Claude Code).
 3. El sistema hace de verdad: `git fetch` → crea un worktree aislado (sin rama) → Atlas planifica con el motor → los agentes trabajan (en paralelo cuando se puede) → Vega corre QA real (`npm run build`, `php artisan test`, …) → Atlas revisa el diff → si hubo cambios, crea **una rama nueva** `agentic/…`, hace **commit** y la **publica** para evaluación. Si no hubo cambios, no se crea ninguna rama.
+   - **Back + Front en paralelo**: elige `lrd-back + lrd-front` en *Repositorio* (o menciona API y pantalla en modo Automático). Cada repo tiene su propio worktree: Diego y Mica editan a la vez, QA prueba cada repo en paralelo y se publica una rama `agentic/…` en cada uno.
+   - **QA en paralelo**: build y pruebas corren a la vez (hasta `QA_PARALLEL` carriles) y se reportan todas las fallas juntas. En Laravel con ParaTest se usa `php artisan test --parallel`.
 4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
@@ -93,6 +95,7 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `ALLOW_PAID_API_FALLBACK` | `false` | Si es `false`, se eliminan `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` del entorno de los CLIs |
 | `GITHUB_PUSH_ENABLED` | `true` | Publica la rama `agentic/…` cuando la misión deja cambios (lo hace el orquestador, nunca la IA) |
 | `GITHUB_PR_ENABLED` | `false` | Además abre un PR contra la rama base |
+| `QA_PARALLEL` | `3` | Comandos de QA a la vez (build, pruebas…). `1` = en serie |
 | `LRD_WORKSPACE_ROOT` | `~/.lrd-agentic-office` | Clones, worktrees, logs crudos y `office.db` |
 | `AGENT_ENGINES` | — | Motor por agente en modo Automático, ej. `diego:claude,rafa:codex` |
 | `ATLAS_REVIEW_ENABLED` | `true` | Revisión final de Atlas con el motor IA |

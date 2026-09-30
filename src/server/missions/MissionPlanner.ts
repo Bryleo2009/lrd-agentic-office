@@ -1,5 +1,5 @@
 import { isAgentId } from "../../shared/agents";
-import type { AgentId, AgentProfile, RepositoryConfig } from "../../shared/types";
+import { MULTI_REPO_SEP, type AgentId, type AgentProfile, type RepositoryConfig } from "../../shared/types";
 
 export interface PlannedStep {
   id: string;
@@ -8,6 +8,8 @@ export interface PlannedStep {
   task: string;
   dependsOn: string[];
   writes: boolean;
+  /** Repositorio del paso (misiones con varios repos). */
+  repo?: string;
 }
 
 export interface MissionPlan {
@@ -45,6 +47,8 @@ export function inferRepo(prompt: string, repos: RepositoryConfig[], mcpAvailabl
   const front = FRONT_WORDS.test(p);
   const back = BACK_WORDS.test(p);
   const byKind = (k: string) => enabled.find((r) => r.kind === k);
+  if (front && back && byKind("frontend") && byKind("backend"))
+    return { id: `${byKind("backend")!.id}${MULTI_REPO_SEP}${byKind("frontend")!.id}`, reason: "menciona front y back: el equipo de back y el de front trabajan en paralelo" };
   if (front && !back && byKind("frontend")) return { id: byKind("frontend")!.id, reason: "habla de interfaz / frontend" };
   if (back && !front && byKind("backend")) return { id: byKind("backend")!.id, reason: "habla de API / backend / integraciones" };
   if (isData) return { id: "none", reason: "es una consulta de análisis sin cambios de código" };
@@ -98,9 +102,22 @@ Tienes acceso a servidores MCP con DATOS REALES DE PRODUCCIÓN (${servers.join("
 - Indica qué consulta usaste para cada cifra.`;
 }
 
-export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | null, base: string, team: AgentProfile[], mcp: string[] = []): string {
+/** Repositorio de trabajo con su carpeta (para planificar misiones de varios repos). */
+export interface PlanRepo {
+  repo: RepositoryConfig;
+  base: string;
+  worktree: string;
+}
+
+export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | null, base: string, team: AgentProfile[], mcp: string[] = [], multi: PlanRepo[] = []): string {
   const roster = team.filter((a) => a.id !== "atlas" && a.id !== "vega").map((a) => `- ${a.id}: ${a.name}, ${a.role}. ${a.tagline}`).join("\n");
-  const where = repo
+  const where = multi.length > 1
+    ? `Esta misión abarca VARIOS repositorios que se trabajan EN PARALELO, cada uno en su propia carpeta:
+${multi.map((m) => `- "${m.repo.id}" (${m.repo.kind ?? "otro"}), rama base ${m.base}, carpeta ${m.worktree}`).join("\n")}
+Cada paso DEBE indicar "repo" con uno de esos ids. El trabajo de backend va en el repo backend y el de frontend en el frontend.
+Pasos de repos distintos no deben depender entre sí salvo que sea imprescindible: si el front necesita un contrato de la API, descríbelo en el "task" de ambos (endpoint, campos, formato) para que avancen a la vez.
+Puedes leer brevemente ambas carpetas para asignar bien el trabajo.`
+    : repo
     ? `Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.
 Explora brevemente la estructura del repositorio (máximo unos pocos comandos de lectura) para asignar bien el trabajo.`
     : `Esta misión NO tiene repositorio: es de análisis / datos. Nadie modifica código; todos los pasos son "writes": false.${mcp.length ? " Asigna las consultas de datos a quien mejor encaje (p. ej. Nora para base de datos, Fiona para finanzas, Rafa/Piero para Rappi/PedidosYa)." : ""}`;
@@ -127,10 +144,16 @@ Reglas del plan:
 - "task" debe ser una instrucción concreta y autocontenida para ese agente.
 
 Responde ÚNICAMENTE con un bloque JSON válido, sin texto adicional, con esta forma:
-{"deliverable":"code_change"|"analysis","steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false}]}`;
+{"deliverable":"code_change"|"analysis","steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
 }
 
-export function parsePlan(text: string, prompt: string): MissionPlan | null {
+/** Repo por defecto de un agente en misiones de varios repos: Mica → frontend, el resto → backend. */
+export function repoForAgent(agent: AgentId, repos: RepositoryConfig[]): string {
+  const want = agent === "mica" ? "frontend" : "backend";
+  return (repos.find((r) => r.kind === want) ?? repos[0]).id;
+}
+
+export function parsePlan(text: string, prompt: string, repos: RepositoryConfig[] = []): MissionPlan | null {
   const candidates: string[] = [];
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/g);
   if (fence) for (const f of fence) candidates.push(f.replace(/```(?:json)?/g, "").trim());
@@ -140,7 +163,7 @@ export function parsePlan(text: string, prompt: string): MissionPlan | null {
   for (const c of candidates) {
     try {
       const j = JSON.parse(c);
-      const plan = validate(j, prompt);
+      const plan = validate(j, prompt, repos);
       if (plan) return plan;
     } catch {
       /* siguiente */
@@ -149,7 +172,7 @@ export function parsePlan(text: string, prompt: string): MissionPlan | null {
   return null;
 }
 
-function validate(j: any, prompt: string): MissionPlan | null {
+function validate(j: any, prompt: string, repos: RepositoryConfig[] = []): MissionPlan | null {
   if (!j || !Array.isArray(j.steps) || j.steps.length === 0) return null;
   // Si la misión pide corregir, el planificador no puede degradarla a "analysis":
   // eso dejaba pasos como "Corregir …" en modo lectura sin poder editar nada.
@@ -169,6 +192,7 @@ function validate(j: any, prompt: string): MissionPlan | null {
       task: String(s.task ?? s.title ?? "").slice(0, 4000),
       dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.map(String) : [],
       writes: analysis ? false : !!s.writes,
+      ...(repos.length > 1 ? { repo: repos.some((r) => r.id === s.repo) ? String(s.repo) : repoForAgent(agent, repos) } : {}),
     });
   }
   if (!steps.length) return null;
@@ -192,7 +216,18 @@ function hasCycle(steps: PlannedStep[]): boolean {
 }
 
 /** Plan base por reglas cuando el motor no devuelve JSON válido. Se informa explícitamente en la UI. */
-export function rulesPlan(prompt: string, repo: RepositoryConfig | null, area: string): MissionPlan {
+export function rulesPlan(prompt: string, repo: RepositoryConfig | null, area: string, repos: RepositoryConfig[] = []): MissionPlan {
+  if (repos.length > 1) {
+    // Varios repos: un responsable por repo, en paralelo.
+    const analysis = isAnalysisOnly(prompt);
+    const steps: PlannedStep[] = repos.map((r, i) => {
+      const agent: AgentId = r.kind === "frontend" ? "mica" : "diego";
+      return analysis
+        ? { id: `s${i + 1}`, agent, title: `Analizar ${r.name}`, task: `${prompt}\nTrabaja solo en ${r.name}. No modifiques archivos; entrega un diagnóstico con evidencia.`, dependsOn: [], writes: false, repo: r.id }
+        : { id: `s${i + 1}`, agent, title: `Implementar en ${r.name}`, task: `${prompt}\nTrabaja solo en ${r.name}; coordina el contrato con el otro repositorio a través de lo descrito en la misión.`, dependsOn: [], writes: true, repo: r.id };
+    });
+    return { deliverable: analysis ? "analysis" : "code_change", steps, source: "rules" };
+  }
   if (!repo) {
     const who: AgentId = ({ rappi: "rafa", pedidosya: "piero", finance: "fiona" } as Record<string, AgentId>)[area] ?? "nora";
     return { deliverable: "analysis", steps: [{ id: "s1", agent: who, title: "Analizar datos", task: prompt, dependsOn: [], writes: false }], source: "rules" };
