@@ -123,6 +123,12 @@ export function buildReport(m: Mission): string {
   out.push(`Hola 👋 Terminé la misión #${m.id} que me pediste:`, `«${ask}»`, "");
   if (headline) out.push(`En resumen: ${headline}`, "");
   if (body) out.push(body.length > 3500 ? `${body.slice(0, 3500)}…` : body, "");
+  const cl = m.checklist ?? [];
+  if (cl.length) {
+    const ok = cl.filter((i) => i.status === "done" || i.status === "skipped").length;
+    const bad = cl.filter((i) => i.status !== "done" && i.status !== "skipped");
+    out.push(`Checklist: ${ok}/${cl.length} cumplidos.${bad.length ? ` Sin confirmar: ${bad.map((i) => `${i.id}. ${i.text}${i.note ? ` (${i.note})` : ""}`).join("; ")}.` : ""}`);
+  }
   if (team.length) out.push(`Trabajamos en esto: ${team.join(", ")}.`);
   // Qué motor hizo qué (cuando se repartió entre Codex y Claude Code, o hubo revisión cruzada).
   const name = (p: string | null) => (p === "codex" ? "Codex" : p === "claude" ? "Claude Code" : "");

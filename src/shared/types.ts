@@ -124,6 +124,18 @@ export interface MissionRepo {
   prUrl: string | null;
 }
 
+/** Un criterio de aceptación de la misión. */
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  /** pending · done (hecho/verificado) · failed (pendiente según la revisión) · skipped (no aplica) */
+  status: "pending" | "done" | "failed" | "skipped";
+  /** Quién lo marcó por última vez y cómo ("hecho" por el implementador, "verificado" por la revisión). */
+  by: AgentId | null;
+  how: "hecho" | "verificado" | "pendiente" | "no aplica" | null;
+  note: string | null;
+}
+
 /** GitHub Actions de la rama publicada. */
 export interface CiInfo {
   repositoryId: string;
@@ -167,6 +179,8 @@ export interface Mission {
   planSource: "ai" | "rules" | null;
   /** Resultado de GitHub Actions por repositorio publicado. */
   ci: CiInfo[];
+  /** Criterios de aceptación de la misión y su avance (se ve en la oficina). */
+  checklist: ChecklistItem[];
   /** Misión con varios repositorios: estado de cada uno (el primero es el principal). Vacío = un solo repo. */
   repos: MissionRepo[];
   createdAt: string;

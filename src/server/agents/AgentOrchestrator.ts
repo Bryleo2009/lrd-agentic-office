@@ -11,6 +11,7 @@ import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
 import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
 import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
@@ -196,6 +197,7 @@ export class AgentOrchestrator {
       planSource: null,
       repos,
       ci: [],
+      checklist: [],
       createdAt: now,
       updatedAt: now,
       steps: [],
@@ -631,7 +633,15 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
   private absorb(missionId: string, agentId: AgentId, text: string, scope: string): string {
     const { lessons, rest } = extractLessons(text);
     if (lessons.length) this.learn(missionId, agentId, lessons, scope, "equipo");
-    return rest || text;
+    // Marcas del checklist (HECHO / VERIFICADO / PENDIENTE / NO_APLICA).
+    const cur = repo.getMission(missionId)?.checklist ?? [];
+    const marked = applyChecklistMarks(cur, rest || text, agentId);
+    if (marked.changed) {
+      this.setMission(missionId, { checklist: marked.items });
+      const done = marked.items.filter((i) => i.status === "done" || i.status === "skipped").length;
+      this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Checklist: ${done}/${marked.items.length} listos`, detail: marked.items.map((i) => `${i.status === "done" ? "✓" : i.status === "failed" ? "✗" : i.status === "skipped" ? "–" : "○"} ${i.id}. ${i.text}`).join("\n"), status: "info", metadata: { checklist: true } });
+    }
+    return marked.rest || rest || text;
   }
 
   /**
@@ -702,7 +712,9 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     }
     const steps = this.materializePlan(id, plan, mission, rs);
     steps.forEach((s, i) => repo.addStep(s, i + 1));
-    this.setMission(id, { status: "running", planSource: plan.source });
+    // Checklist visible: la que extrajo Atlas o, si no, las viñetas/puntos de la misión.
+    const checklist = makeChecklist(plan.checklist?.length ? plan.checklist : extractChecklist(mission.prompt));
+    this.setMission(id, { status: "running", planSource: plan.source, ...(checklist.length ? { checklist } : {}) });
     const multi = rs.length > 1;
     const repoTag = (s: MissionStep) => (multi && s.repositoryId ? ` [${rs.find((x) => x.id === s.repositoryId)?.shortName ?? s.repositoryId}]` : "");
     this.emit(id, "atlas", {
@@ -853,7 +865,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${lessonsFor(this.lessonScopes(m))}
+${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${lessonsFor(this.lessonScopes(m))}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -1022,6 +1034,7 @@ Revisa el diff contra lo pedido: requisitos incumplidos, bugs, regresiones, caso
 - Por cada problema real escribe una línea "BLOQUEANTE: archivo:línea — qué está mal y cómo corregirlo".
 - Observaciones menores: líneas "SUGERENCIA: …" (no bloquean).
 - Si no hay nada bloqueante, escribe una línea "APROBADO".
+${checklistPrompt(repo.getMission(id)?.checklist ?? [], "verify")}
 Termina con "RESUMEN:" y una frase corta.
 
 git diff --stat:
@@ -1036,7 +1049,10 @@ ${diff.patch.slice(0, 40000)}`;
       return;
     }
     let review = this.absorb(id, "atlas", res.text, w.cfg.id);
-    const blocking = review.split(/\r?\n/).filter((l) => /^\s*[-*•]?\s*BLOQUEANTE\s*:/i.test(l));
+    // Lo que la revisión dejó PENDIENTE en el checklist también vuelve al implementador.
+    const pendientes = (repo.getMission(id)?.checklist ?? []).filter((i) => i.status === "failed").map((i) => `BLOQUEANTE: punto ${i.id} del checklist sin cumplir — ${i.text}${i.note ? ` (${i.note})` : ""}`);
+    const blocking = [...review.split(/\r?\n/).filter((l) => /^\s*[-*•]?\s*BLOQUEANTE\s*:/i.test(l)), ...pendientes];
+    if (pendientes.length) review += `\n\n${pendientes.join("\n")}`;
     const writer = writers.at(-1);
     for (let round = 0; blocking.length && writer && round < config.crossReviewFixRounds; round++) {
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Revisión cruzada${tag}: ${blocking.length} punto(s) bloqueante(s); se los paso a ${getAgent(writer.agentId).name}`, detail: blocking.join("\n"), status: "warning" });
@@ -1058,6 +1074,7 @@ ${messageBus
   .join("\n\n")
   .slice(0, 20000)}
 
+${checklistPrompt(repo.getMission(id)?.checklist ?? [], "implement")}
 No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
         "Corregir lo señalado en la revisión",
         rt,
@@ -1227,6 +1244,7 @@ ${findings.slice(0, 30000)}
 ${inbound.length ? `\nEntregas recibidas: ${inbound.map((h) => `${getAgent(h.from).name}: ${h.title}`).join("; ")}` : ""}
 ${diff.stat ? `\ngit diff --stat:\n${diff.stat}` : ""}${diff.patch ? `\n\nCambios (la misión abarca varios repositorios; tu carpeta es solo el primero, aquí tienes el diff de todos):\n${diff.patch.slice(0, 30000)}` : ""}
 
+${checklistPrompt(mission.checklist ?? [], "verify")}
 No modifiques archivos. Responde en español, conciso (máx. 15 líneas).
 Después, si el equipo perdió tiempo en algo evitable (permisos o herramientas que fallaron, exploración innecesaria, pasos de más), agrega hasta 3 líneas "LECCIÓN: …" concretas para hacerlo mejor la próxima vez (sin datos personales).
 Termina con "RESUMEN:" y una frase corta.`;

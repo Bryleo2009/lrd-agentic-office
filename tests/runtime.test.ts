@@ -354,3 +354,35 @@ test("'en la misma rama' / 'directos en esa rama' = entregar directo en la rama 
   for (const no of ["no lo hagas en la misma rama", "no uses esa rama, crea agentic/feature/x", "trabaja en la rama feature/x", "revisa el CI de la rama feature/x"])
     assert.equal(deliveryPrefs(no).directToBase, false, no);
 });
+
+test("checklist: se extrae de la misión y se marca HECHO / VERIFICADO / PENDIENTE", async () => {
+  const fs = await import("node:fs");
+  const { extractChecklist, makeChecklist, applyChecklistMarks } = await import("../src/server/missions/checklist");
+  const items = makeChecklist(extractChecklist(fs.readFileSync("tests/fixtures/mision-console-origin.txt", "utf8")));
+  assert.ok(items.some((i) => /No modificar backend/.test(i.text)));
+  assert.ok(items.some((i) => /Verifica que la rama base actual sea/.test(i.text)));
+  assert.ok(!items.some((i) => /release\/fase3\.1$/.test(i.text.trim())), "no toma líneas de bloques de código");
+
+  let cl = makeChecklist(["Filtro por origen", "Badge OTRO para null", "Pruebas de normalización"]);
+  let r = applyChecklistMarks(cl, "Hecho.\nHECHO: 1, 2\nRESUMEN: ok", "mica");
+  assert.equal(r.rest, "Hecho.\nRESUMEN: ok");
+  assert.deepEqual(r.items.map((i) => i.status), ["done", "done", "pending"]);
+  r = applyChecklistMarks(r.items, "VERIFICADO: 1\nPENDIENTE: 2 — no cubre valores vacíos\nPENDIENTE: 3 — faltan pruebas", "atlas");
+  assert.deepEqual(r.items.map((i) => [i.status, i.how]), [["done", "verificado"], ["failed", "pendiente"], ["failed", "pendiente"]]);
+  assert.equal(r.items[1].note, "no cubre valores vacíos");
+  cl = applyChecklistMarks(r.items, "HECHO: 2", "mica").items;
+  assert.equal(cl[1].status, "failed", "un HECHO no borra un PENDIENTE de la revisión");
+  assert.equal(applyChecklistMarks(cl, "VERIFICADO: 2", "atlas").items[1].status, "done");
+});
+
+test("comandos en palabras: desenvuelve pwsh/cmd de Windows y describe qué hacen", async () => {
+  const { describeCommand, unwrapShell } = await import("../src/server/runtime/parsers/common");
+  const pw = '"C:\\Users\\bryle\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe" -Command "git status --short"';
+  assert.equal(unwrapShell(pw), "git status --short");
+  assert.equal(describeCommand(pw), "Revisando qué archivos cambiaron");
+  assert.equal(describeCommand('pwsh.exe -NoProfile -Command "Get-Content -Path src/views/Console.vue | Select-Object -First 80"'), "Leyendo Console.vue");
+  assert.equal(describeCommand(`rg -n 'shouldOfferStockOverride' src`), "Buscando «shouldOfferStockOverride»");
+  assert.equal(describeCommand('cmd.exe /d /s /c "npm run lint:check"'), "Pasando el linter");
+  assert.equal(describeCommand("cd front && npm run type-check"), "Verificando los tipos");
+  assert.equal(describeCommand("bash scripts/check-backend"), "Corriendo el chequeo completo del back");
+});

@@ -1,6 +1,6 @@
 import type { ExecutorEvent } from "../AgentExecutor";
 import { commandExitReason, explainCliFailure, explainedDetail } from "../humanize";
-import { base, classifyCommand, clip, firstLine, rel, summarizeOutput, unwrapShell } from "./common";
+import { base, classifyCommand, clip, describeCommand, firstLine, rel, summarizeOutput, unwrapShell } from "./common";
 
 /**
  * Parser desacoplado de `codex exec --json`.
@@ -137,10 +137,12 @@ export class CodexJsonParser {
     const c = classifyCommand(cmd);
     const kind = c.kind === "test" || c.kind === "build" ? "test" : c.kind;
     this.cmdKinds.set(id, { kind, cmd });
-    if (kind === "test") return [{ type: "TEST_STARTED", title: `Ejecutando ${firstLine(cmd, 60)}`, command: cmd, status: "running" }];
-    if (kind === "read") return [{ type: "FILE_READ", title: `Analizando ${base(c.file)}`, file: rel(c.file, this.cwd), command: cmd, status: "running" }];
-    if (kind === "search") return [{ type: "SEARCH_STARTED", title: `Buscando: ${firstLine(cmd, 60)}`, command: cmd, status: "running" }];
-    return [{ type: "COMMAND_STARTED", title: `$ ${firstLine(cmd, 70)}`, command: cmd, status: "running" }];
+    // Títulos en palabras ("Leyendo Console.vue", "Pasando el linter"); el comando exacto va en `command` (Terminal).
+    const say = describeCommand(cmd);
+    if (kind === "test") return [{ type: "TEST_STARTED", title: `${say}…`, command: cmd, status: "running" }];
+    if (kind === "read") return [{ type: "FILE_READ", title: say, file: rel(c.file, this.cwd), command: cmd, status: "running" }];
+    if (kind === "search") return [{ type: "SEARCH_STARTED", title: `${say}…`, command: cmd, status: "running" }];
+    return [{ type: "COMMAND_STARTED", title: `${say}…`, command: cmd, status: "running" }];
   }
 
   private cmdEnd(id: string, cmd: string, output: string, exit: number): ExecutorEvent[] {
@@ -161,7 +163,7 @@ export class CodexJsonParser {
     }
     return [
       { type: "COMMAND_OUTPUT", title: firstLine(output, 120) || "(sin salida)", command: cmd, detail: clip(output, 12000), status, metadata: meta },
-      { type: "COMMAND_FINISHED", title: exit === 0 ? `OK: ${firstLine(cmd, 60)}` : `Falló (${commandExitReason(exit)}): ${firstLine(cmd, 50)}`, command: cmd, status, metadata: meta },
+      { type: "COMMAND_FINISHED", title: exit === 0 ? `Listo: ${describeCommand(cmd).replace(/^./, (x) => x.toLowerCase())}` : `No funcionó (${commandExitReason(exit)}): ${describeCommand(cmd).replace(/^./, (x) => x.toLowerCase())}`, command: cmd, status, metadata: meta },
     ];
   }
 

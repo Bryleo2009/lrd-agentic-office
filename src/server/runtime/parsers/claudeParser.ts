@@ -1,6 +1,6 @@
 import type { ExecutorEvent } from "../AgentExecutor";
 import { explainCliFailure, explainedDetail } from "../humanize";
-import { base, classifyCommand, clip, firstLine, rel, summarizeOutput } from "./common";
+import { base, classifyCommand, clip, describeCommand, firstLine, rel, summarizeOutput } from "./common";
 
 interface PendingTool {
   name: string;
@@ -123,14 +123,12 @@ export class ClaudeStreamParser {
         const cmd = String(input.command ?? "");
         const c = classifyCommand(cmd);
         kind = c.kind === "test" || c.kind === "build" ? "test" : c.kind === "read" ? "read" : c.kind === "search" ? "search" : "command";
-        if (kind === "test")
-          ev = { type: "TEST_STARTED", title: `Ejecutando ${firstLine(cmd, 60)}`, command: cmd, tool: name, status: "running" };
-        else if (kind === "read")
-          ev = { type: "FILE_READ", title: `Analizando ${base(c.file)}`, file: rel(c.file, this.cwd), command: cmd, tool: name, status: "running" };
-        else if (kind === "search")
-          ev = { type: "SEARCH_STARTED", title: `Buscando: ${firstLine(cmd, 60)}`, command: cmd, tool: name, status: "running" };
-        else
-          ev = { type: "COMMAND_STARTED", title: `$ ${firstLine(cmd, 70)}`, command: cmd, tool: name, detail: input.description ?? null, status: "running" };
+        // Claude Code suele describir el comando ("Run the linter"); si no, se describe en palabras.
+        const say = describeCommand(cmd);
+        if (kind === "test") ev = { type: "TEST_STARTED", title: `${say}…`, command: cmd, tool: name, status: "running" };
+        else if (kind === "read") ev = { type: "FILE_READ", title: say, file: rel(c.file, this.cwd), command: cmd, tool: name, status: "running" };
+        else if (kind === "search") ev = { type: "SEARCH_STARTED", title: `${say}…`, command: cmd, tool: name, status: "running" };
+        else ev = { type: "COMMAND_STARTED", title: `${say}…`, command: cmd, tool: name, detail: input.description ?? null, status: "running" };
         break;
       }
       case "TodoWrite": {
@@ -200,7 +198,7 @@ export class ClaudeStreamParser {
         const cmd = String(t.input.command ?? "");
         return [
           { type: "COMMAND_OUTPUT", title: firstLine(text, 120) || "(sin salida)", command: cmd, detail: clip(text, 12000), status },
-          { type: "COMMAND_FINISHED", title: isError ? `Falló: ${firstLine(cmd, 60)}` : `OK: ${firstLine(cmd, 60)}`, command: cmd, status },
+          { type: "COMMAND_FINISHED", title: `${isError ? "No funcionó" : "Listo"}: ${describeCommand(cmd).replace(/^./, (x) => x.toLowerCase())}`, command: cmd, status },
         ];
       }
       case "status":

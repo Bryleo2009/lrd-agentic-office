@@ -17,13 +17,13 @@ function safeList(v: unknown): string[] {
 // ---------- missions ----------
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
-  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []) }).run();
+  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []), checklist: JSON.stringify(m.checklist ?? []) }).run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  const { mcpServers, repos, ci, ...rest } = patch;
+  const { mcpServers, repos, ci, checklist, ...rest } = patch;
   db.update(schema.missions)
-    .set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), ...(repos ? { repos: JSON.stringify(repos) } : {}), ...(ci ? { ci: JSON.stringify(ci) } : {}), updatedAt: now() })
+    .set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), ...(repos ? { repos: JSON.stringify(repos) } : {}), ...(ci ? { ci: JSON.stringify(ci) } : {}), ...(checklist ? { checklist: JSON.stringify(checklist) } : {}), updatedAt: now() })
     .where(eq(schema.missions.id, id))
     .run();
 }
@@ -68,7 +68,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], checklist: safeRepos(r.checklist) as unknown as Mission["checklist"], steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {

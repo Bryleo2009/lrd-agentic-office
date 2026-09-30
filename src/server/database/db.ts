@@ -53,6 +53,7 @@ const stepCols = (sqlite.prepare("PRAGMA table_info(mission_steps)").all() as { 
 if (!stepCols.includes("repository_id")) sqlite.exec("ALTER TABLE mission_steps ADD COLUMN repository_id TEXT");
 
 if (!cols.includes("ci")) sqlite.exec("ALTER TABLE missions ADD COLUMN ci TEXT NOT NULL DEFAULT '[]'");
+if (!cols.includes("checklist")) sqlite.exec("ALTER TABLE missions ADD COLUMN checklist TEXT NOT NULL DEFAULT '[]'");
 if (!cols.includes("resumes")) sqlite.exec("ALTER TABLE missions ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0");
 
 // Las misiones que quedaron a medias por un reinicio del servidor NO se dan por fallidas aquí:

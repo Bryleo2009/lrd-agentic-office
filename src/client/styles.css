@@ -1565,3 +1565,117 @@ label.check input {
     resize: none;
   }
 }
+
+/* ---------------------------------------------------------------- Conversaciones entre agentes */
+.talk-row {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.talk-row > i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex: none;
+}
+.talk-body {
+  min-width: 0;
+  flex: 1;
+}
+.talk-head {
+  font-size: 12px;
+}
+.talk-head .link {
+  font-weight: 700;
+}
+.talk-text {
+  margin-top: 2px;
+  line-height: 1.45;
+}
+.talk-body details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.talk-body details .msg {
+  max-width: 100%;
+  margin-top: 6px;
+}
+.talk-sep {
+  text-align: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 6px;
+}
+
+/* ---------------------------------------------------------------- Checklist de la misión */
+.hud-checklist {
+  margin: 8px 0 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.hud-check-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+.hud-check-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+.hud-check-bar i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+  transition: width 0.4s ease;
+}
+.hud-checklist ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 210px;
+  overflow: auto;
+}
+.hud-checklist li {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 0;
+}
+.hud-checklist li .ic {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  color: var(--muted);
+}
+.hud-checklist li.done .ic {
+  color: var(--ok);
+}
+.hud-checklist li.done .tx {
+  color: var(--muted);
+}
+.hud-checklist li.failed .ic,
+.hud-checklist li.failed small {
+  color: var(--err);
+}
+.hud-checklist li small {
+  color: var(--muted);
+}
+.muted.tiny {
+  font-size: 11px;
+  margin-top: 4px;
+}

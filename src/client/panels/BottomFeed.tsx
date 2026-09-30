@@ -4,6 +4,7 @@ import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId } from "../../shared/types";
 import { branchesOf, eventTone, MISSION_STATUS, repoLabel, timeOf, typeLabel } from "../app/format";
 import { useStore } from "../app/store";
+import { RichText } from "../drawers/RichText";
 
 const HIDDEN = new Set(["COMMAND_OUTPUT", "TEST_OUTPUT", "SESSION_STARTED", "AGENT_JOINED_MEETING"]);
 
@@ -38,7 +39,11 @@ export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
   const order = useStore((s) => s.missionOrder);
   const runtime = useStore((s) => s.runtime);
   const config = useStore((s) => s.config);
-  const [tab, setTab] = useState<"activity" | "missions" | "engines">("activity");
+  const [tab, setTab] = useState<"activity" | "talk" | "missions" | "engines">("activity");
+  const talk = useMemo(
+    () => events.filter((e) => e.type === "HANDOFF" || e.type === "MEETING_STARTED" || e.type === "MEETING_FINISHED" || (e.type === "MESSAGE_SENT" && (e.metadata as { meetingId?: string } | null)?.meetingId)),
+    [events],
+  );
   const visible = useMemo(() => events.filter((e) => !HIDDEN.has(e.type)), [events]);
   const last = visible[visible.length - 1];
 
@@ -57,6 +62,9 @@ export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
             <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
               Actividad
             </button>
+            <button className={tab === "talk" ? "on" : ""} onClick={() => setTab("talk")}>
+              Conversaciones
+            </button>
             <button className={tab === "missions" ? "on" : ""} onClick={() => setTab("missions")}>
               Misiones
             </button>
@@ -72,6 +80,15 @@ export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
                 .map((e) => (
                   <EventRow key={e.id} e={e} onAgent={onAgent} />
                 ))}
+            </div>
+          )}
+          {tab === "talk" && (
+            <div className="feed-list talk">
+              {talk.length === 0 && <div className="muted pad">Todavía no hay conversaciones. Aquí verás lo que los agentes se pasan entre ellos (contexto, hallazgos, fallas de QA, revisiones).</div>}
+              {talk
+                .slice(-120)
+                .reverse()
+                .map((e) => <TalkRow key={e.id} e={e} onAgent={onAgent} />)}
             </div>
           )}
           {tab === "missions" && (
@@ -119,6 +136,52 @@ export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Un mensaje entre agentes, como en un chat: quién le dice qué a quién, con lo que le pasó desplegable. */
+function TalkRow({ e, onAgent }: { e: AgentRuntimeEvent; onAgent: (id: AgentId) => void }) {
+  const meta = (e.metadata ?? {}) as { from?: AgentId; to?: AgentId };
+  if (e.type === "MEETING_STARTED" || e.type === "MEETING_FINISHED")
+    return (
+      <div className="talk-sep">
+        <span>{timeOf(e.timestamp)}</span> {e.title}
+      </div>
+    );
+  const from = meta.from ?? e.agentId;
+  const to = meta.to ?? null;
+  const a = from ? getAgent(from) : null;
+  const b = to ? getAgent(to) : null;
+  const long = e.detail && e.detail.trim() !== e.title.trim() && e.detail.length > e.title.length + 20;
+  return (
+    <div className="talk-row">
+      <i style={{ background: a?.color ?? "#64748b" }} />
+      <div className="talk-body">
+        <div className="talk-head">
+          <button className="link" onClick={() => a && onAgent(a.id)}>
+            {a?.name ?? "sistema"}
+          </button>
+          {b && (
+            <>
+              {" → "}
+              <button className="link" onClick={() => onAgent(b.id)}>
+                {b.name}
+              </button>
+            </>
+          )}
+          <span className="muted"> · {timeOf(e.timestamp)}</span>
+        </div>
+        <div className="talk-text">{e.title}</div>
+        {long && (
+          <details>
+            <summary>Ver lo que le pasó</summary>
+            <div className="msg agent">
+              <RichText text={e.detail!} />
+            </div>
+          </details>
+        )}
+      </div>
     </div>
   );
 }

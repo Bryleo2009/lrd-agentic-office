@@ -41,6 +41,7 @@ export const missions = sqliteTable("missions", {
   planSource: text("plan_source"),
   repos: text("repos").notNull().default("[]"),
   ci: text("ci").notNull().default("[]"),
+  checklist: text("checklist").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

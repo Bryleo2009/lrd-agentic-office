@@ -28,7 +28,7 @@ process.stdin.on("end", () => {
   };
   if (input.includes("SOLO planificar")) {
     log({ kind: "plan" });
-    const plan = { deliverable: "code_change", steps: [
+    const plan = { deliverable: "code_change", checklist: ["Endpoint GET /api/totales", "Pantalla de totales en el front"], steps: [
       { id: "s1", agent: "diego", title: "Endpoint de totales", task: "Agregar endpoint GET /api/totales", dependsOn: [], writes: true, repo: "lrd-back" },
       { id: "s2", agent: "mica", title: "Pantalla de totales", task: "Mostrar totales de GET /api/totales", dependsOn: [], writes: true, repo: "lrd-front" },
     ] };
@@ -45,13 +45,13 @@ process.stdin.on("end", () => {
     return say("Corregí lo que rompía el lint.\nRESUMEN: CI corregido");
   }
   if (input.includes("Puedes modificar archivos")) {
-    const who = input.includes("Pantalla de totales") ? "front" : "back";
+    const who = input.includes("Tu tarea (Pantalla de totales)") ? "front" : "back";
     const t0 = Date.now();
     log({ kind: "agent", who });
     setTimeout(() => {
       fs.appendFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who} ${Date.now()}\n`);
       fs.appendFileSync(process.env.FAKE_TIMELINE, JSON.stringify({ who, start: t0, end: Date.now(), cwd: process.cwd() }) + "\n");
-      say(`Listo en ${who}.\nRESUMEN: cambio aplicado en ${who}`);
+      say(`Listo en ${who}.\nHECHO: ${who === "back" ? 1 : 2}\nRESUMEN: cambio aplicado en ${who}`);
     }, Number(process.env.FAKE_AGENT_MS ?? 1500));
     return;
   }
@@ -60,5 +60,5 @@ process.stdin.on("end", () => {
     return say("Pedido 201631: entregado a las 13:05.\nLECCIÓN: Para ubicar un pedido por número busca en numero_orden y correlativo a la vez.\nRESUMEN: pedido encontrado y entregado");
   }
   log({ kind: "review" });
-  say("Revisé los cambios de ambos repositorios; todo coherente.\nRESUMEN: back y front listos");
+  say(`Revisé los cambios de ambos repositorios; todo coherente.${input.includes("VERIFICADO: <número>") ? "\nVERIFICADO: 1\nVERIFICADO: 2" : ""}\nRESUMEN: back y front listos`);
 });

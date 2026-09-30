@@ -33,7 +33,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
             {steps.map((s) => {
               const a = getAgent(s.agentId);
               return (
-                <button key={s.id} className={`step ${s.status}`} onClick={() => onAgent(s.agentId)} title={`${s.title} · ${STEP_STATUS[s.status]}${s.error ? `\n${s.error}` : ""}`}>
+                <button key={s.id} className={`step ${s.status}`} onClick={() => onAgent(s.agentId)} title={`${s.title} · ${STEP_STATUS[s.status]}${s.provider ? ` · ${s.provider === "codex" ? "Codex" : "Claude Code"}` : ""}${s.error ? `\n${s.error}` : ""}`}>
                   <i style={{ background: a.color }} />
                   <span>{a.name}</span>
                   <small>{s.kind === "xreview" ? "revisión cruzada" : s.kind === "ci" ? "Actions" : s.kind === "qa" ? "QA" : s.kind === "review" ? "revisión" : s.kind === "plan" ? "plan" : s.writes ? "cambios" : "análisis"}</small>
@@ -41,6 +41,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
               );
             })}
           </div>
+          <Checklist items={current.checklist ?? []} live={live} />
           <div className="hud-meta">
             {current.repos?.length > 1 && <span>{repoLabel(current)} · en paralelo</span>}
             {branchesOf(current).map((b) => (
@@ -79,6 +80,50 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Checklist de la misión: lo que falta y lo que ya se hizo/verificó. */
+function Checklist({ items, live }: { items: import("../../shared/types").ChecklistItem[]; live: boolean }) {
+  const [open, setOpen] = useState(true);
+  if (!items.length) return null;
+  const done = items.filter((i) => i.status === "done" || i.status === "skipped").length;
+  const failed = items.filter((i) => i.status === "failed").length;
+  const icon = (st: string) => (st === "done" ? "✓" : st === "failed" ? "✗" : st === "skipped" ? "–" : "○");
+  return (
+    <div className="hud-checklist">
+      <button className="hud-check-head" onClick={() => setOpen(!open)}>
+        <span>Checklist</span>
+        <span className="hud-check-bar">
+          <i style={{ width: `${(done / items.length) * 100}%` }} />
+        </span>
+        <b>
+          {done}/{items.length}
+        </b>
+        {failed > 0 && <span className="warn-text">{failed} pendiente{failed === 1 ? "" : "s"}</span>}
+        <span className="chev">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <ul>
+          {items.map((i) => (
+            <li key={i.id} className={i.status} title={i.note ?? ""}>
+              <span className="ic">{icon(i.status)}</span>
+              <span className="tx">
+                {i.text}
+                {i.how && i.by && (
+                  <small>
+                    {" "}
+                    · {i.how} por {getAgent(i.by).name}
+                    {i.note ? ` — ${i.note}` : ""}
+                  </small>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!live && done < items.length && failed === 0 && <div className="muted tiny">Algunos puntos no se marcaron explícitamente; revisa el informe de Atlas.</div>}
     </div>
   );
 }

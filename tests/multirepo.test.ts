@@ -91,6 +91,9 @@ test("misión back + front: Diego y Mica en paralelo, QA en carriles paralelos, 
   // Una rama publicada en cada repositorio.
   assert.equal(m.repos.filter((r) => r.pushed && r.branch?.startsWith("agentic/")).length, 2);
   for (const bare of [back, front]) assert.match(git(["branch", "--list", "agentic/*"], bare), /agentic\//);
+  // Checklist visible: lo marcan los desarrolladores (HECHO) y lo confirma la revisión (VERIFICADO).
+  assert.deepEqual(m.checklist.map((i) => [i.text, i.status, i.how]), [["Endpoint GET /api/totales", "done", "verificado"], ["Pantalla de totales en el front", "done", "verificado"]]);
+  assert.doesNotMatch(m.summary ?? "", /VERIFICADO:|HECHO:/, "las marcas no ensucian el resumen");
   const steps = m.steps.map((s) => `${s.kind}:${s.agentId}:${s.repositoryId ?? "-"}`);
   assert.ok(steps.includes("qa:vega:lrd-back") && steps.includes("qa:vega:lrd-front"), steps.join(", "));
 });

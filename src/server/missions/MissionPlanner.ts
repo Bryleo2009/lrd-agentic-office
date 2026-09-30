@@ -14,6 +14,8 @@ export interface PlannedStep {
 
 export interface MissionPlan {
   deliverable: "code_change" | "analysis";
+  /** Criterios de aceptación verificables extraídos de la misión. */
+  checklist?: string[];
   steps: PlannedStep[];
   source: "ai" | "rules";
   note?: string;
@@ -263,9 +265,10 @@ Reglas del plan:
 - Si la misión pide corregir/arreglar/implementar, al menos un paso debe tener "writes": true (y "deliverable": "code_change").
 - Pasos independientes no deben depender entre sí (se ejecutan en paralelo).
 - "task" debe ser una instrucción concreta y autocontenida para ese agente.
+- "checklist": los criterios de aceptación VERIFICABLES que pide la misión (archivos a tocar o no tocar, reglas, pruebas pedidas, entregables), cada uno en una frase corta; máximo 12. Si la misión no pide nada concreto, déjalo vacío.
 
 Responde ÚNICAMENTE con un bloque JSON válido, sin texto adicional, con esta forma:
-{"deliverable":"code_change"|"analysis","steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
+{"deliverable":"code_change"|"analysis","checklist":["…"],"steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
 }
 
 /** Repo por defecto de un agente en misiones de varios repos: Mica → frontend, el resto → backend. */
@@ -319,7 +322,8 @@ function validate(j: any, prompt: string, repos: RepositoryConfig[] = []): Missi
   if (!steps.length) return null;
   for (const s of steps) s.dependsOn = s.dependsOn.filter((d) => ids.has(d) && d !== s.id);
   if (hasCycle(steps)) return null;
-  return { deliverable: analysis ? "analysis" : "code_change", steps, source: "ai" };
+  const checklist = Array.isArray(j.checklist) ? j.checklist.map((x: unknown) => String(x)).filter((x: string) => x.trim().length > 3).slice(0, 12) : undefined;
+  return { deliverable: analysis ? "analysis" : "code_change", steps, source: "ai", ...(checklist?.length ? { checklist } : {}) };
 }
 
 function hasCycle(steps: PlannedStep[]): boolean {
