@@ -7,7 +7,8 @@
  * Guarda client_id/client_secret de cada entorno (Producción y QA), pide tokens de 15 min a /oauth/token
  * (scope database:read), los renueva solo y expone únicamente herramientas de LECTURA.
  *
- * Configuración (nunca en el repo): %USERPROFILE%\.lrd-agentic-office\lrd-mcp.json (o LRD_MCP_CONFIG)
+ * Configuración (nunca en el repo): <carpeta de datos>\lrd-mcp.json — la carpeta es LRD_WORKSPACE_ROOT (del entorno
+ * o del .env del proyecto) o %USERPROFILE%\.lrd-agentic-office; LRD_MCP_CONFIG apunta a otro archivo.
  *   { "targets": {
  *       "production": { "baseUrl": "https://back.rollsdediego.com",    "clientId": "…", "clientSecret": "…" },
  *       "qa":         { "baseUrl": "https://back.qa.rollsdediego.com", "clientId": "…", "clientSecret": "…" } } }
@@ -43,8 +44,26 @@ function normTarget(v) {
 const log = (...a) => process.stderr.write(`[lrd-data] ${a.join(" ")}\n`);
 
 // ---------------------------------------------------------------- configuración
+/**
+ * Carpeta de datos de la oficina: LRD_WORKSPACE_ROOT del entorno, o el del .env del proyecto
+ * (el mismo que usa la oficina), o ~/.lrd-agentic-office.
+ */
+function workspaceRoot() {
+  const expand = (p) => (p === "~" || /^~[\\/]/.test(p) ? path.join(os.homedir(), p.slice(2)) : p);
+  if (process.env.LRD_WORKSPACE_ROOT) return path.resolve(expand(process.env.LRD_WORKSPACE_ROOT));
+  try {
+    const env = fs.readFileSync(new URL("../../.env", import.meta.url), "utf8");
+    const m = env.match(/^\s*LRD_WORKSPACE_ROOT\s*=\s*(.+?)\s*$/m);
+    const v = m?.[1].replace(/^(["'])(.*)\1$/, "$2").trim();
+    if (v) return path.resolve(expand(v));
+  } catch {
+    /* sin .env */
+  }
+  return path.join(os.homedir(), ".lrd-agentic-office");
+}
+
 function loadTargets() {
-  const file = process.env.LRD_MCP_CONFIG || path.join(os.homedir(), ".lrd-agentic-office", "lrd-mcp.json");
+  const file = process.env.LRD_MCP_CONFIG || path.join(workspaceRoot(), "lrd-mcp.json");
   let fromFile = {};
   try {
     fromFile = JSON.parse(fs.readFileSync(file, "utf8")).targets ?? {};

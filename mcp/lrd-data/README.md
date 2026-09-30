@@ -29,7 +29,9 @@ Anota el `Client ID` y el `Client secret` de cada uno.
 
 ## 2. Credenciales en tu PC (fuera del repo)
 
-`%USERPROFILE%\.lrd-agentic-office\lrd-mcp.json`:
+`lrd-mcp.json` en la carpeta de datos de la oficina: la de `LRD_WORKSPACE_ROOT` en el `.env` del proyecto
+(p. ej. `C:\Users\bryle\Documents\Programas Web\.lrd-agentic-office\lrd-mcp.json`) o, si no está definida,
+`%USERPROFILE%\.lrd-agentic-office\lrd-mcp.json`. Otra ruta: variable `LRD_MCP_CONFIG`.
 
 ```json
 {
