@@ -110,6 +110,14 @@ Si tienes un servidor MCP configurado en Codex (`codex mcp list`) o Claude Code 
 Sin esa marca los MCP se desactivan para la misión. Con ella, los agentes reciben reglas estrictas: sólo lecturas, con límites,
 sin exponer datos personales y citando la consulta usada. **Recomendación:** que el MCP de producción use un usuario de BD de solo lectura.
 
+### Tablet de avance (botón *Avance* arriba, o *Ver avance* en la tarjeta de la misión)
+
+Ventana aparte, como el chat (se mueve arrastrando el encabezado y se agranda desde la esquina; en el celular ocupa la
+pantalla), para seguir al equipo en vivo: porcentaje de avance, tiempo transcurrido, preguntas que esperan tu respuesta
+(se responden ahí mismo) y cuatro pestañas: **Equipo** (una tarjeta por persona con lo que hace, motor, tiempo y lo
+último que hizo; *Ubicar* y *Chat*), **Checklist**, **Pasos** (con duración, entrega y GitHub Actions) y **Actividad**.
+Puedes elegir cualquier misión reciente en el selector.
+
 ### Uso por motor y limpieza (Ajustes → Uso y limpieza)
 
 Pasos, tiempo de trabajo, fallas, límites alcanzados y misiones de Codex y de Claude Code (7/30/90 días), más cuántas

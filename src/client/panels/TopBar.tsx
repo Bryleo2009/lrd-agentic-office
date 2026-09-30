@@ -54,6 +54,13 @@ export function TopBar({ engine }: { engine: OfficeEngine | null }) {
           </svg>
           <span className="hide-sm">Centrar oficina</span>
         </button>
+        <button className="btn ghost glass" onClick={() => useStore.getState().setTablet(!useStore.getState().tablet.open)} title="Tablet de avance del equipo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="4" y="2" width="16" height="20" rx="2.5" />
+            <path d="M8 7h8M8 11h8M8 15h5" />
+          </svg>
+          <span className="hide-sm">Avance</span>
+        </button>
         <button className="btn ghost glass" onClick={() => setSettings(true)} title="Equipo, repositorios y datos">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="3" />

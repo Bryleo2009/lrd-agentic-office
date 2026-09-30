@@ -6,6 +6,7 @@ import { MissionVisualController } from "../office/MissionVisualController";
 import { OfficeEngine } from "../office/OfficeEngine";
 import { BottomFeed } from "../panels/BottomFeed";
 import { MissionHud } from "../panels/MissionHud";
+import { ProgressTablet } from "../panels/ProgressTablet";
 import { NewMissionPanel } from "../panels/NewMissionPanel";
 import { SettingsPanel } from "../panels/SettingsPanel";
 import { TopBar } from "../panels/TopBar";
@@ -148,6 +149,9 @@ export function App() {
       </ErrorBoundary>
       <ErrorBoundary name="el chat">
         <ChatWindow onChatSent={(id) => visualRef.current?.onChatSent(id)} onFocusAgent={focusAgent} />
+      </ErrorBoundary>
+      <ErrorBoundary name="la tablet de avance">
+        <ProgressTablet onFocusAgent={focusAgent} onChat={(id) => useStore.getState().setChatWindow(id)} />
       </ErrorBoundary>
       <ErrorBoundary name="la actividad">
         <BottomFeed onAgent={focusAgent} />

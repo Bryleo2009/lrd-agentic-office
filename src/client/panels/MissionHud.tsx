@@ -71,6 +71,9 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
             {current.taskKind && current.taskKind !== "general" && <span title="Guía de trabajo aplicada (config/guides)">guía: {current.taskKind === "ci-fix" ? "corrección de CI" : "consulta de datos"}</span>}
           </div>
           {current.error && <div className="hud-error">{current.error.split("\n")[0]}</div>}
+          <button className="btn tiny ghost" onClick={() => useStore.getState().setTablet(true, current.id)} title="Abrir la tablet de avance del equipo">
+            Ver avance
+          </button>
           {live && (
             <button
               className="btn tiny ghost"
@@ -92,7 +95,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
 }
 
 /** Checklist de la misión: lo que falta y lo que ya se hizo/verificó. */
-function Checklist({ items, live }: { items: import("../../shared/types").ChecklistItem[]; live: boolean }) {
+export function Checklist({ items, live }: { items: import("../../shared/types").ChecklistItem[]; live: boolean }) {
   const [open, setOpen] = useState(true);
   if (!items.length) return null;
   const done = items.filter((i) => i.status === "done" || i.status === "skipped").length;
@@ -136,7 +139,7 @@ function Checklist({ items, live }: { items: import("../../shared/types").Checkl
 }
 
 /** Pregunta de un agente o aprobación antes de publicar: la misión espera tu respuesta. */
-function QuestionCard({ mission, q }: { mission: Mission; q: MissionQuestion }) {
+export function QuestionCard({ mission, q }: { mission: Mission; q: MissionQuestion }) {
   const toast = useStore((s) => s.showToast);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);

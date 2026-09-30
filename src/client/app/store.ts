@@ -35,6 +35,8 @@ interface State {
   drawerTab: "activity" | "chat" | "terminal" | "profile" | null;
   /** Agente cuyo chat está abierto en la ventana flotante. */
   chatWindow: AgentId | null;
+  /** Tablet de avance: ventana aparte con el progreso del equipo (misión elegida o la actual). */
+  tablet: { open: boolean; missionId: string | null };
 
   hydrate(s: Snapshot): void;
   addEvent(e: AgentRuntimeEvent): void;
@@ -54,6 +56,7 @@ interface State {
   removePendingReport(id: string): void;
   setDrawerTab(t: State["drawerTab"]): void;
   setChatWindow(id: AgentId | null): void;
+  setTablet(open: boolean, missionId?: string | null): void;
 }
 
 const MAX_EVENTS = 600;
@@ -78,6 +81,7 @@ export const useStore = create<State>((set, get) => ({
   pendingReports: [],
   drawerTab: null,
   chatWindow: null,
+  tablet: { open: false, missionId: null },
 
   hydrate(s) {
     const missions: Record<string, Mission> = {};
@@ -131,6 +135,9 @@ export const useStore = create<State>((set, get) => ({
   },
   setDrawerTab(drawerTab) {
     set({ drawerTab });
+  },
+  setTablet(open, missionId) {
+    set({ tablet: { open, missionId: missionId === undefined ? get().tablet.missionId : missionId } });
   },
   setChatWindow(chatWindow) {
     set({ chatWindow });
