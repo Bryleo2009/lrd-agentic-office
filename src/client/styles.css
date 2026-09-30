@@ -55,9 +55,56 @@ code {
 .office {
   position: absolute;
   inset: 0;
+  /* Evita que clic/doble clic/arrastre seleccione el canvas (lo pinta todo de azul). */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .office canvas {
   display: block;
+  outline: none;
+}
+.office canvas::selection {
+  background: transparent;
+}
+.ui-error {
+  position: absolute;
+  z-index: 60;
+  right: 16px;
+  bottom: 80px;
+  max-width: 380px;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(40, 14, 20, 0.95);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  color: var(--text);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.ui-error.full {
+  left: 50%;
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 32px));
+}
+.ui-error code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #fca5a5;
+}
+.ui-error-actions {
+  display: flex;
+  gap: 8px;
+}
+.ui-error-actions button {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
 }
 .loading {
   position: absolute;

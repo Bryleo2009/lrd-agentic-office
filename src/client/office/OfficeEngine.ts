@@ -40,6 +40,7 @@ export class OfficeEngine {
   private reservations = new Map<string, AgentId>();
   private selected: AgentId | null = null;
   private onSelectCb: ((id: AgentId | null) => void) | null = null;
+  private onGlLostCb: ((lost: boolean) => void) | null = null;
   private time = 0;
   private started = performance.now();
   private meetingSeats = new Map<AgentId, string>();
@@ -58,6 +59,9 @@ export class OfficeEngine {
       preference: "webgl",
     });
     el.appendChild(this.app.canvas);
+    // Si la GPU pierde el contexto WebGL el canvas queda transparente (pantalla azul): avisar.
+    this.app.canvas.addEventListener("webglcontextlost", () => this.onGlLostCb?.(true));
+    this.app.canvas.addEventListener("webglcontextrestored", () => this.onGlLostCb?.(false));
     this.collision = new CollisionMap();
     this.nav = new NavigationGraph(this.collision);
     this.scene = new OfficeScene();
@@ -168,6 +172,10 @@ export class OfficeEngine {
 
   onSelect(cb: (id: AgentId | null) => void): void {
     this.onSelectCb = cb;
+  }
+
+  onContextLost(cb: (lost: boolean) => void): void {
+    this.onGlLostCb = cb;
   }
 
   select(id: AgentId | null): void {
