@@ -1,0 +1,32 @@
+{
+  "repositories": [
+    {
+      "id": "lrd-back",
+      "name": "lrd-back",
+      "github": "Bryleo2009/lrd-back",
+      "cloneUrl": "git@github.com:Bryleo2009/lrd-back.git",
+      "shortName": "back",
+      "kind": "backend",
+      "enabled": true,
+      "allowedBases": ["release/fase2", "release/fase3.1", "main"],
+      "defaultBase": "release/fase2"
+    },
+    {
+      "id": "lrd-front",
+      "name": "lrd-front",
+      "github": "Bryleo2009/lrd-front",
+      "cloneUrl": "git@github.com:Bryleo2009/lrd-front.git",
+      "shortName": "front",
+      "kind": "frontend",
+      "enabled": true,
+      "allowedBases": ["release/fase2", "release/fase3.1", "main"],
+      "defaultBase": "release/fase2",
+      "qaCommands": ["npm run build"]
+    },
+    { "id": "ofsystem", "name": "OfSystem", "github": "Bryleo2009/OfSystem", "cloneUrl": "git@github.com:Bryleo2009/OfSystem.git", "shortName": "ofsystem", "enabled": false, "allowedBases": ["main"], "defaultBase": "main" },
+    { "id": "erp-ofsystem-back", "name": "erp-ofsystem-back", "github": "Bryleo2009/erp-ofsystem-back", "cloneUrl": "git@github.com:Bryleo2009/erp-ofsystem-back.git", "shortName": "erp-back", "kind": "backend", "enabled": false, "allowedBases": ["main"], "defaultBase": "main" },
+    { "id": "erp-ofsystem-front", "name": "erp-ofsystem-front", "github": "Bryleo2009/erp-ofsystem-front", "cloneUrl": "git@github.com:Bryleo2009/erp-ofsystem-front.git", "shortName": "erp-front", "kind": "frontend", "enabled": false, "allowedBases": ["main"], "defaultBase": "main" },
+    { "id": "lrd-deploy-scripts", "name": "lrd-deploy-scripts", "github": "Bryleo2009/lrd-deploy-scripts", "cloneUrl": "git@github.com:Bryleo2009/lrd-deploy-scripts.git", "shortName": "deploy", "enabled": false, "allowedBases": ["main"], "defaultBase": "main" }
+  ],
+  "protectedBranches": ["main", "release/fase2", "release/fase3.1"]
+}

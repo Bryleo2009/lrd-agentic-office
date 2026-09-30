@@ -1,0 +1,11 @@
+import { chromium } from "playwright-core";
+const [,, out="/tmp/claude-0/z.png", agent="diego", zoom="2.2", wait="3000"] = process.argv;
+const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium", args: ["--use-gl=angle","--use-angle=swiftshader","--enable-unsafe-swiftshader"] });
+const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+page.on("pageerror", (e) => console.log("pageerror", e.message));
+await page.goto("http://127.0.0.1:4173/", { waitUntil: "domcontentloaded" });
+await page.waitForTimeout(2500);
+await page.evaluate(([a,z]) => { const o = window.__office; const e = o.entity(a); const p = {x:(e.pos.x-e.pos.y)*32,y:(e.pos.x+e.pos.y)*16-30}; o.camera.focus(p.x,p.y,Number(z)); }, [agent, zoom]);
+await page.waitForTimeout(Number(wait));
+await page.screenshot({ path: out });
+await browser.close();

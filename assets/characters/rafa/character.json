@@ -1,0 +1,16 @@
+{
+  "$schema": "../character.schema.json",
+  "renderer": "rig",
+  "skin": "#d49a6a",
+  "hair": "#241a14",
+  "hairStyle": "buzz",
+  "outfit": "polo",
+  "shirt": "#ea580c",
+  "shirtAccent": "#fed7aa",
+  "pants": "#1e293b",
+  "shoes": "#0f172a",
+  "accessory": "headset",
+  "height": 1.02,
+  "build": 1.1,
+  "beard": true
+}

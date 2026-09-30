@@ -1,0 +1,48 @@
+{
+  "name": "lrd-agentic-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Oficina virtual viva que representa en tiempo real el trabajo real de Codex CLI y Claude Code sobre los repositorios LRD.",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --ignore ./src/client --ignore ./assets src/server/index.ts",
+    "build": "vite build",
+    "start": "cross-env NODE_ENV=production tsx src/server/index.ts",
+    "doctor": "tsx scripts/doctor.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "validate:visual": "node scripts/validate-visual.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/middie": "^9.3.4",
+    "@fastify/static": "^10.1.5",
+    "@fastify/websocket": "^11.3.1",
+    "better-sqlite3": "^13.0.3",
+    "cross-env": "^10.1.0",
+    "cross-spawn": "^7.0.6",
+    "dotenv": "^18.0.4",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.12.5",
+    "nanoid": "^6.0.1",
+    "pixi.js": "^8.21.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.1.1",
+    "playwright-core": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}

@@ -1,0 +1,16 @@
+import { chromium } from "playwright-core";
+const url = process.argv[2] ?? "http://127.0.0.1:4173/";
+const out = process.argv[3] ?? "/tmp/claude-0/shot.png";
+const wait = Number(process.argv[4] ?? 4000);
+const w = Number(process.argv[5] ?? 1600), h = Number(process.argv[6] ?? 1000);
+const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium", args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] }).catch(async () => chromium.launch({ args: ["--use-gl=angle","--use-angle=swiftshader"] }));
+const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
+const logs = [];
+page.on("console", (m) => logs.push(`[${m.type()}] ${m.text()}`));
+page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
+await page.goto(url, { waitUntil: "domcontentloaded" });
+await page.waitForTimeout(wait);
+await page.screenshot({ path: out });
+const m = await page.evaluate(() => (window.__office ? window.__office.metrics() : null)).catch(() => null);
+console.log(JSON.stringify({ logs: logs.slice(0, 30), fps: m?.fps, agents: m?.agents?.map(a => `${a.id}:${a.state}/${a.mode}/${a.action} walked=${a.walked.toFixed(1)}`) }, null, 1));
+await browser.close();

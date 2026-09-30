@@ -1,0 +1,15 @@
+{
+  "$schema": "../character.schema.json",
+  "renderer": "rig",
+  "skin": "#c68c62",
+  "hair": "#2b1d16",
+  "hairStyle": "side_part",
+  "outfit": "blazer",
+  "shirt": "#1e3a5f",
+  "shirtAccent": "#f4f6fa",
+  "pants": "#2a3242",
+  "shoes": "#1b1b1f",
+  "accessory": "none",
+  "height": 1.05,
+  "build": 1.05
+}

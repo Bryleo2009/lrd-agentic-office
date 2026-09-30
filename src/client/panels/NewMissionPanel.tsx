@@ -1,0 +1,141 @@
+import { useEffect, useMemo, useState } from "react";
+import type { EngineChoice } from "../../shared/types";
+import { api } from "../app/api";
+import { useStore } from "../app/store";
+
+const EXAMPLES = [
+  "Valida el CI de lrd-front y corrige el problema.",
+  "Revisa por qué Rappi no está mandando el código de entrega, corrígelo y prepara el PR.",
+  "Analiza el checkout y dime por qué falla esta validación.",
+];
+
+export function NewMissionPanel() {
+  const open = useStore((s) => s.newMissionOpen);
+  const setOpen = useStore((s) => s.setNewMission);
+  const repos = useStore((s) => s.repositories);
+  const runtime = useStore((s) => s.runtime);
+  const config = useStore((s) => s.config);
+  const toast = useStore((s) => s.showToast);
+  const enabled = useMemo(() => repos.filter((r) => r.enabled), [repos]);
+  const [prompt, setPrompt] = useState("");
+  const [repoId, setRepoId] = useState("");
+  const [base, setBase] = useState("");
+  const [engine, setEngine] = useState<EngineChoice>("auto");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!repoId && enabled.length) setRepoId(enabled[0].id);
+  }, [enabled, repoId]);
+  const repo = enabled.find((r) => r.id === repoId);
+  useEffect(() => {
+    if (repo && !repo.allowedBases.includes(base)) setBase(repo.defaultBase);
+  }, [repo, base]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setOpen]);
+
+  if (!open) return null;
+
+  const status = (p: "codex" | "claude") => {
+    const r = runtime.find((x) => x.provider === p);
+    if (!r) return "…";
+    return r.enabled && r.installed && r.authenticated !== false ? "disponible" : r.installed ? "sin sesión" : "no disponible";
+  };
+  const autoLabel = `Automático (${config?.aiEngineDefault === "claude" ? "Claude Code" : "Codex"})`;
+
+  const submit = async () => {
+    if (!prompt.trim() || !repo) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createMission({ prompt: prompt.trim(), repositoryId: repo.id, baseBranch: base, engine });
+      setPrompt("");
+      setOpen(false);
+      toast("Misión creada: el equipo se pone en marcha", "info");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="sheet-backdrop" onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+      <div className="mission-panel glass" role="dialog" aria-label="Nueva misión">
+        <div className="panel-head">
+          <div>
+            <div className="eyebrow">Nueva misión</div>
+            <h2>¿Qué debe resolver el equipo?</h2>
+          </div>
+          <button className="icon-btn" onClick={() => setOpen(false)} aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        <textarea
+          autoFocus
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Ej.: Revisa por qué Rappi no está mandando el código de entrega, corrígelo y prepara el PR."
+          rows={4}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
+          }}
+        />
+        <div className="examples">
+          {EXAMPLES.map((x) => (
+            <button key={x} className="chip" onClick={() => setPrompt(x)}>
+              {x.length > 52 ? x.slice(0, 50) + "…" : x}
+            </button>
+          ))}
+        </div>
+        <div className="fields">
+          <label>
+            <span>Repositorio</span>
+            <select value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+              {enabled.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Rama base</span>
+            <select value={base} onChange={(e) => setBase(e.target.value)}>
+              {repo?.allowedBases.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Motor IA</span>
+            <select value={engine} onChange={(e) => setEngine(e.target.value as EngineChoice)}>
+              <option value="auto">{autoLabel}</option>
+              <option value="codex">Codex · {status("codex")}</option>
+              <option value="claude">Claude Code · {status("claude")}</option>
+            </select>
+          </label>
+        </div>
+        <div className="fineprint">
+          Se crea una rama <code>agentic/…</code> en un worktree aislado desde <code>{base || "…"}</code>. La rama base nunca se modifica.
+          Push {config?.githubPushEnabled ? "habilitado" : "deshabilitado"} · PR {config?.githubPrEnabled ? "habilitado" : "deshabilitado"}.
+        </div>
+        {error && <div className="error-box">{error}</div>}
+        <div className="panel-actions">
+          <button className="btn ghost" onClick={() => setOpen(false)}>
+            Cancelar
+          </button>
+          <button className="btn primary" disabled={busy || !prompt.trim() || !repo} onClick={submit}>
+            {busy ? "Creando…" : "Lanzar misión"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
