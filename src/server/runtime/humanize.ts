@@ -11,9 +11,23 @@ export interface Explained {
   hint: string;
 }
 
-type Rule = { re: RegExp; explain: (engine: string, fix: string) => Explained };
+type Rule = { re: RegExp; explain: (engine: string, fix: string, text: string) => Explained };
 
 const RULES: Rule[] = [
+  {
+    // Va primero: un config.toml roto impide arrancar y su mensaje puede mencionar MCP, red, etc.
+    re: /error loading config|config\.toml|invalid transport|missing field .?(command|url)/i,
+    explain: (e, fix, text) => {
+      const server = text.match(/mcp_servers\.([\w-]+)/)?.[1];
+      const file = fix === "codex" ? "~/.codex/config.toml" : "la configuración de Claude Code";
+      return server
+        ? {
+            title: `${e} no pudo leer su configuración: el servidor MCP «${server}» está mal definido`,
+            hint: `En ${file}, la sección [mcp_servers.${server}] necesita \`command\` (servidor local) o \`url\` (servidor remoto), y tu versión de ${e} debe soportar ese tipo. Corrígela o coméntala, o actualiza ${e}. Puedes comprobarlo con \`${fix} mcp list\`.`,
+          }
+        : { title: `${e} no pudo leer su configuración`, hint: `Revisa ${file}: tiene un valor inválido. El detalle técnico indica la línea.` };
+    },
+  },
   {
     re: /not logged in|please (log ?in|login)|unauthori[sz]ed|\b401\b|invalid[_ ]api[_ ]key|authentication|expired.*token|token.*expired|refresh token/i,
     explain: (e, fix) => ({ title: `${e} no tiene la sesión iniciada`, hint: `Abre una terminal y ejecuta \`${fix} login\`; luego vuelve a lanzar la misión.` }),
@@ -66,14 +80,18 @@ export function lastUsefulLine(text: string): string {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !/^at\s|^\s*\^|^node:internal|^-+$/.test(l));
-  const l = lines[lines.length - 1] ?? "";
+  // Preferir la última línea que describe el error; una línea suelta como "in `x`" no dice nada.
+  const errLine = [...lines].reverse().find((x) => /error|failed|invalid|cannot|could not|denied|not found/i.test(x));
+  let l = errLine ?? lines[lines.length - 1] ?? "";
+  const i = lines.lastIndexOf(l);
+  if (i >= 0 && i + 1 < lines.length && lines[i + 1].length < 60) l = `${l} ${lines[i + 1]}`;
   return l.length > 200 ? l.slice(0, 199) + "…" : l;
 }
 
 /** Explica por qué un CLI (Codex / Claude Code) se detuvo. `code` es el código de salida del proceso, si lo hay. */
 export function explainCliFailure(provider: "codex" | "claude", code: number | null | undefined, text: string): Explained {
   const { name, fix } = engineInfo(provider);
-  for (const r of RULES) if (r.re.test(text)) return r.explain(name, fix);
+  for (const r of RULES) if (r.re.test(text)) return r.explain(name, fix, text);
   if (code === null || code === 137 || code === 143 || code === -9 || code === 3221225786)
     return { title: `${name} fue detenido desde fuera`, hint: "El proceso se cerró de golpe (falta de memoria, cierre de la terminal o un antivirus). Vuelve a lanzar la misión." };
   if (code === 127 || code === 9009)

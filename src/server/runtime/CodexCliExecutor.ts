@@ -103,34 +103,63 @@ export class CodexCliExecutor extends BaseCliExecutor {
   }
 
   /**
-   * Algunas entradas MCP (p. ej. herramientas integradas como node_repl) no aceptan el override
-   * `mcp_servers.<n>.enabled=false`. Si el error lo menciona y es una herramienta (no fuente de datos),
-   * se reintenta sin ese override. Nunca se relaja el bloqueo de una fuente de datos.
+   * Correcciones seguras cuando Codex no arranca por los overrides `mcp_servers.<n>.enabled=false`:
+   *
+   * 1. "invalid transport" en `mcp_servers.<n>`: el servidor no está definido en el config.toml que
+   *    Codex lee desde este directorio (p. ej. vive en el config de otro proyecto), así que el override
+   *    crea una entrada sin `command` ni `url`. Se confirma con `codex mcp list` en el mismo directorio:
+   *    si ahí no existe, quitar el override no expone nada.
+   * 2. Herramientas integradas (p. ej. node_repl, cua_repl) que no aceptan el override: se quitan.
+   *
+   * Nunca se relaja el bloqueo de una fuente de datos que sí está disponible para el agente.
    */
-  protected recoverFromStartupFailure(inv: Invocation, stderr: string): { inv: Invocation; note: string } | null {
-    const names: string[] = [];
-    for (let i = 0; i < inv.args.length - 1; i++) {
-      const m = inv.args[i] === "-c" ? inv.args[i + 1].match(/^mcp_servers\.([\w-]+)\.enabled=false$/) : null;
-      if (m && stderr.includes(m[1])) names.push(m[1]);
+  protected async recoverFromStartupFailure(inv: Invocation, stderr: string, session: AgentSession): Promise<{ inv: Invocation; note: string } | null> {
+    const overridden = inv.args.flatMap((a, i) => (inv.args[i - 1] === "-c" ? [a.match(/^mcp_servers\.([\w-]+)\.enabled=false$/)?.[1]] : [])).filter((n): n is string => !!n);
+    if (!overridden.length) return null;
+    const mentioned = overridden.filter((n) => new RegExp(`mcp_servers\\.${n}\\b|\\b${n}\\b`).test(stderr));
+
+    if (/invalid transport|missing field .?(command|url)/i.test(stderr) && mentioned.length) {
+      const here = await this.listMcpAt(session.config.cwd);
+      const undefinedHere = here ? mentioned.filter((n) => !here.includes(n)) : [];
+      if (undefinedHere.length)
+        return {
+          inv: this.withoutOverrides(inv, undefinedHere),
+          note: `${undefinedHere.join(", ")} no está configurado para esta carpeta; se reintenta sin intentar desactivarlo`,
+        };
+      // Definido aquí: puede ser una herramienta integrada que no acepta el override (caso 2).
     }
-    const generic = !names.length && /mcp_servers/i.test(stderr);
-    if (!names.length && !generic) return null;
-    const drop = generic
-      ? inv.args.flatMap((a, i) => (inv.args[i - 1] === "-c" && /^mcp_servers\.([\w-]+)\.enabled=false$/.test(a) ? [a.split(".")[1]] : [])).filter(isToolMcp)
-      : names;
+
+    const generic = !mentioned.length && /mcp_servers/i.test(stderr);
+    if (!mentioned.length && !generic) return null;
+    const drop = generic ? overridden.filter(isToolMcp) : mentioned;
     if (!drop.length || drop.some((n) => !isToolMcp(n))) return null;
+    return {
+      inv: this.withoutOverrides(inv, drop),
+      note: `Codex no aceptó desactivar ${drop.join(", ")} (herramienta integrada); se reintenta sin ese ajuste`,
+    };
+  }
+
+  private withoutOverrides(inv: Invocation, names: string[]): Invocation {
     const args: string[] = [];
     for (let i = 0; i < inv.args.length; i++) {
-      if (inv.args[i] === "-c" && drop.some((n) => inv.args[i + 1] === `mcp_servers.${n}.enabled=false`)) {
+      if (inv.args[i] === "-c" && names.some((n) => inv.args[i + 1] === `mcp_servers.${n}.enabled=false`)) {
         i++;
         continue;
       }
       args.push(inv.args[i]);
     }
-    return {
-      inv: { ...inv, args, parser: new CodexJsonParser((inv.parser as CodexJsonParser).cwd) },
-      note: `Codex no aceptó desactivar ${drop.join(", ")} (herramienta integrada); se reintenta sin ese ajuste`,
-    };
+    return { ...inv, args, parser: new CodexJsonParser((inv.parser as CodexJsonParser).cwd) };
+  }
+
+  /** Nombres de MCP que Codex ve desde `cwd` (null si Codex no puede leer su configuración ahí). */
+  private async listMcpAt(cwd: string): Promise<string[] | null> {
+    const r = await run(this.command, ["mcp", "list", "--json"], { cwd, timeoutMs: 15000 });
+    if (r.code !== 0) return null;
+    try {
+      return (JSON.parse(r.stdout) as { name: string }[]).map((m) => String(m.name));
+    } catch {
+      return null;
+    }
   }
 
   private save(st: RuntimeStatus): RuntimeStatus {

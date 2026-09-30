@@ -34,7 +34,7 @@ export abstract class BaseCliExecutor implements AgentExecutor {
    * una invocación corregida (p. ej. sin un override de configuración que la versión no acepta).
    * Devuelve null si no hay corrección segura.
    */
-  protected recoverFromStartupFailure(_inv: Invocation, _stderr: string, _session: AgentSession): { inv: Invocation; note: string } | null {
+  protected async recoverFromStartupFailure(_inv: Invocation, _stderr: string, _session: AgentSession): Promise<{ inv: Invocation; note: string } | null> {
     return null;
   }
 
@@ -142,8 +142,9 @@ export abstract class BaseCliExecutor implements AgentExecutor {
       yield { type: "AGENT_ERROR", title: /ENOENT/.test(spawnError) ? ex.title : `No se pudo abrir ${this.command}`, detail: explainedDetail(ex, undefined, spawnError), status: "error", metadata: { hint: ex.hint } };
       return;
     }
-    if (code !== 0 && !terminal && produced === 0 && attempt === 0) {
-      const fix = this.recoverFromStartupFailure(inv, stderr, session);
+    // Hasta 2 correcciones seguidas: cada arranque fallido puede revelar un ajuste distinto.
+    if (code !== 0 && !terminal && produced === 0 && attempt < 2) {
+      const fix = await this.recoverFromStartupFailure(inv, stderr, session);
       if (fix) {
         yield { type: "AGENT_STATUS", title: fix.note, detail: tail(stderr, 1500), status: "warning" };
         yield* this.runInvocation(session, fix.inv, promptForLog, attempt + 1);
