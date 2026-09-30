@@ -40,6 +40,7 @@ export const missions = sqliteTable("missions", {
   summary: text("summary"),
   planSource: text("plan_source"),
   repos: text("repos").notNull().default("[]"),
+  ci: text("ci").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

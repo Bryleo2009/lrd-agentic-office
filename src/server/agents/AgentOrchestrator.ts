@@ -2,7 +2,7 @@ import { customAlphabet } from "nanoid";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import fs from "node:fs";
 import path from "node:path";
-import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type AgentId, type EngineChoice, type Mission, type MissionRepo, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
+import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionRepo, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
 import { config, loadRepositories, paths } from "../config";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
@@ -11,6 +11,7 @@ import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
 import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
 import { buildPlannerPrompt, deliveryPrefs, inferBase, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
@@ -184,6 +185,7 @@ export class AgentOrchestrator {
       summary: null,
       planSource: null,
       repos,
+      ci: [],
       createdAt: now,
       updatedAt: now,
       steps: [],
@@ -300,7 +302,8 @@ export class AgentOrchestrator {
       const steps = await this.prepareSteps(id, mission, rs, primary.wt, rt);
       if (rt.cancelled) throw new MissionError("Cancelada");
 
-      const dag = new MissionDagExecutor(steps, {
+      // Los pasos "ci" (GitHub Actions) no son del DAG: se ejecutan tras publicar la rama.
+      const dag = new MissionDagExecutor(steps.filter((s) => s.kind !== "ci"), {
         isCancelled: () => rt.cancelled,
         onSkip: (s, reason) => this.setStep(id, s, { status: "skipped", error: reason }),
         run: (s) => this.runStep(id, s, steps, rt),
@@ -327,6 +330,18 @@ export class AgentOrchestrator {
       });
       if (!results.some((x) => x.commitSha)) this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: "Sin cambios: no se crea rama ni commit", status: "info" });
 
+      // 5) GitHub Actions: esperar a que quede en verde; si falla por los cambios de la misión, corregir y volver a publicar.
+      const toCheck = results.filter((x) => x.pushed && x.commitSha && x.branch);
+      if (config.ciWaitEnabled && toCheck.length) {
+        this.setMission(id, { status: "ci" });
+        const ci = await Promise.all(toCheck.map((x) => this.ciLoop(id, mission, rt.repos.get(x.repositoryId)!, x, steps, rt, multi)));
+        if (rt.cancelled) throw new MissionError("Cancelada");
+        const fixed = results.find((x) => x.commitSha) ?? results[0];
+        this.setMission(id, { commitSha: fixed.commitSha, ...(multi ? { repos: results } : {}) });
+        const red = ci.filter((c) => c.state === "failure" || c.state === "timeout");
+        if (red.length) throw new MissionError(`GitHub Actions no quedó en verde: ${red.map((c) => `${multi ? `${c.repositoryId}: ` : ""}${c.detail}`).join("; ")}`);
+      }
+
       this.setMission(id, { status: "done" });
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true, sha: main.commitSha, branch: main.branch } });
     } catch (e) {
@@ -345,6 +360,116 @@ export class AgentOrchestrator {
         status: cancelled ? "warning" : "error",
         metadata: { missionFailed: !cancelled },
       });
+    }
+  }
+
+  /** Guarda el estado de GitHub Actions de un repo en la misión (para la oficina y el informe). */
+  private saveCi(id: string, info: CiInfo): void {
+    const cur = repo.getMission(id)?.ci ?? [];
+    this.setMission(id, { ci: [...cur.filter((c) => c.repositoryId !== info.repositoryId), { ...info }] });
+  }
+
+  /**
+   * Espera GitHub Actions de la rama publicada. Si falla y NO falla también en la rama base, Vega le
+   * pasa el log al último desarrollador del repo, que corrige; se hace commit, se publica y se espera
+   * de nuevo (hasta CI_FIX_ITERATIONS). Si la rama no dispara workflows o gh no está disponible, se
+   * documenta claramente (nunca se declara verde sin una ejecución real en verde).
+   */
+  private async ciLoop(id: string, mission: Mission, w: WorkRepo, res: MissionRepo, steps: MissionStep[], rt: MissionRuntime, multi: boolean): Promise<CiInfo> {
+    const tag = multi ? ` · ${w.cfg.name}` : "";
+    const short = multi ? `ci-${w.cfg.shortName}` : "ci";
+    let step = steps.find((s) => s.id === `${id}-${short}`);
+    if (!step) {
+      step = this.newStep(id, short, "vega", `GitHub Actions${tag}`, `Esperar GitHub Actions de ${res.branch}`, [], false, "ci", multi ? w.cfg.id : null);
+      repo.addStep(step, 900 + steps.length);
+      steps.push(step);
+    }
+    const info: CiInfo = { repositoryId: w.cfg.id, state: "pending", detail: "Esperando GitHub Actions…", url: null, sha: res.commitSha, attempts: 0 };
+    this.setStep(id, step, { status: "running", startedAt: new Date().toISOString(), error: null });
+    this.saveCi(id, info);
+    this.emit(id, "vega", { provider: "github", sessionId: null, type: "AGENT_STARTED", title: `Vega: esperando GitHub Actions${tag}`, detail: `${w.cfg.github} · ${res.branch} · ${res.commitSha?.slice(0, 7)}`, status: "running", metadata: { stepId: step.id } });
+    const finish = (state: CiInfo["state"], detail: string, stepStatus: "done" | "failed", tone: "success" | "warning" | "error") => {
+      info.state = state;
+      info.detail = detail;
+      this.saveCi(id, info);
+      this.setStep(id, step!, { status: stepStatus, result: detail, error: stepStatus === "failed" ? detail : null, finishedAt: new Date().toISOString() });
+      this.emit(id, "vega", {
+        provider: "github",
+        sessionId: null,
+        type: tone === "success" ? "AGENT_FINISHED" : tone === "error" ? "AGENT_BLOCKED" : "AGENT_STATUS",
+        title: state === "success" ? `GitHub Actions en verde${tag}` : state === "none" ? `La rama no disparó GitHub Actions${tag}` : state === "unavailable" ? `No se pudo verificar GitHub Actions${tag}` : state === "unrelated" ? `GitHub Actions falla, pero no por esta misión${tag}` : `GitHub Actions en rojo${tag}`,
+        detail: `${detail}${info.url ? `\n${info.url}` : ""}`,
+        status: tone,
+        metadata: { stepId: step!.id, ci: state, url: info.url },
+      });
+      return info;
+    };
+
+    let sha = res.commitSha!;
+    for (;;) {
+      const r = await waitForCi(
+        github,
+        { repo: w.cfg.github, branch: res.branch!, sha, appearMs: config.ciAppearMs, timeoutMs: config.ciTimeoutMs, pollMs: config.ciPollMs },
+        { isCancelled: () => rt.cancelled, onProgress: (t) => this.emit(id, "vega", { provider: "github", sessionId: null, type: "AGENT_STATUS", title: `Actions${tag}: ${firstLine(t, 110)}`, detail: t, status: "running" }) },
+      );
+      info.sha = sha;
+      info.url = r.failed[0]?.url ?? r.runs[0]?.url ?? info.url;
+      if (r.state === "cancelled") return info;
+      if (r.state === "success") return finish("success", r.detail, "done", "success");
+      if (r.state === "none") return finish("none", `${r.detail} No se declara verde sin una ejecución real.`, "done", "warning");
+      if (r.state === "unavailable")
+        return finish("unavailable", `No se pudo consultar GitHub Actions con gh (${firstLine(r.detail, 160)}). Instala gh y ejecuta \`gh auth login\` en esta PC.`, "done", "warning");
+      if (r.state === "timeout") return finish("timeout", r.detail, "failed", "error");
+
+      // Falló: ¿también falla en la rama base? Entonces no lo causa esta misión.
+      const onBase = await Promise.all(r.failed.map((f) => github.lastConclusion(w.cfg.github, w.base, f.workflowName)));
+      if (onBase.every((c) => c && c !== "success"))
+        return finish("unrelated", `${r.detail}. El mismo workflow también está en rojo en ${w.base}: no lo causan los cambios de esta misión.`, "done", "warning");
+      if (info.attempts >= config.ciFixIterations || res.branch === w.base)
+        return finish("failure", `${r.detail}${info.attempts ? ` (tras ${info.attempts} corrección(es))` : ""}`, "failed", "error");
+
+      info.attempts++;
+      this.saveCi(id, info);
+      const logs = (await Promise.all(r.failed.map(async (f) => `### ${f.workflowName} (${f.conclusion}) ${f.url}\n${await github.failedLog(w.cfg.github, f.databaseId)}`))).join("\n\n");
+      const writer = rt.lastWriter.get(w.cfg.id) ?? (w.cfg.kind === "frontend" ? "mica" : "diego");
+      this.emit(id, "vega", { provider: "github", sessionId: null, type: "AGENT_STATUS", title: `Actions falló${tag}: ${firstLine(r.detail, 80)}. Se lo paso a ${getAgent(writer).name}`, detail: logs.slice(-4000), status: "warning" });
+      messageBus.handoff(id, "vega", writer, `GitHub Actions falló: ${firstLine(r.detail, 80)}`, logs);
+      await sleep(config.visualPacingMs);
+      const provider = runtime.forAgent(writer, mission.provider, mission.engine);
+      const fix = await this.runAgent(
+        id,
+        writer,
+        provider,
+        w.wt,
+        "workspace-write",
+        `${getAgent(writer).systemBrief}
+GitHub Actions falló en ${w.cfg.github}, rama ${res.branch} (commit ${sha.slice(0, 7)}), después de los cambios de esta misión: "${mission.prompt.slice(0, 400)}".
+Corrige SOLO lo que causan los cambios de esta misión, con el cambio mínimo y sin tocar nada fuera de su alcance.${w.cfg.checkCommand ? ` Verifica con \`${w.cfg.checkCommand}\` (o la parte que falló).` : ""}
+Si la falla no tiene relación con estos cambios (p. ej. un problema de infraestructura o algo que ya fallaba antes), NO modifiques archivos y empieza tu respuesta con "NO_RELACIONADO:" y el motivo.
+
+Log de los jobs que fallaron:
+${messageBus
+  .take(id, writer)
+  .map((h) => h.payload)
+  .join("\n\n")
+  .slice(-24000)}
+
+No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una frase corta.`,
+        "Corregir GitHub Actions",
+        rt,
+      );
+      if (!fix.ok) return finish("failure", `${r.detail}. No se pudo corregir: ${firstLine(fix.error, 160)}`, "failed", "error");
+      const text = this.absorb(id, writer, fix.text, w.cfg.id);
+      if (/NO_RELACIONADO/i.test(text)) return finish("unrelated", `${r.detail}. ${getAgent(writer).name}: ${firstLine(text.replace(/.*NO_RELACIONADO:\s*/is, ""), 200)}`, "done", "warning");
+      if (!(await gitManager.status(w.wt)).trim()) return finish("failure", `${r.detail}. ${getAgent(writer).name} no encontró qué cambiar.`, "failed", "error");
+      const newSha = await gitManager.commit(w.wt, `fix(ci): ${firstLine(r.detail, 60)}\n\nMisión ${id} · corrección tras GitHub Actions (intento ${info.attempts})`);
+      if (!newSha) return finish("failure", `${r.detail}. No se pudo crear el commit de corrección.`, "failed", "error");
+      this.emit(id, writer, { provider: "git", sessionId: null, type: "GIT_COMMIT", title: `Commit ${newSha.slice(0, 7)}${tag} (corrección de CI)`, status: "success", metadata: { sha: newSha, branch: res.branch, repositoryId: w.cfg.id } });
+      await gitManager.push(w.wt);
+      repo.insertDelivery({ missionId: id, kind: "push", ref: `${w.cfg.id}:${res.branch}` });
+      this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_PUSH", title: `Corrección publicada${tag}: ${res.branch}`, detail: "Esperando GitHub Actions de nuevo", status: "success", metadata: { branch: res.branch, repositoryId: w.cfg.id } });
+      sha = newSha;
+      res.commitSha = newSha;
     }
   }
 

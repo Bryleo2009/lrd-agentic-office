@@ -23,7 +23,7 @@ export class MissionVisualController {
 
   /** Estado inicial al conectar: pasos que ya estaban corriendo (sin reproducir el historial). */
   bootstrap(missions: Mission[]): void {
-    const running = missions.find((m) => ["preparing", "planning", "running", "qa", "committing"].includes(m.status));
+    const running = missions.find((m) => ["preparing", "planning", "running", "qa", "committing", "ci"].includes(m.status));
     if (running) {
       this.screenMission = running;
       for (const s of running.steps.filter((s) => s.status === "running")) {

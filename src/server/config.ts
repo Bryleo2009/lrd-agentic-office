@@ -52,6 +52,14 @@ export const config = {
   qaParallel: Math.max(1, Number(env.QA_PARALLEL ?? 3)),
   /** Veces que una misión se retoma sola tras reinicios del servidor antes de darla por fallida. */
   maxResumes: Math.max(0, Number(env.MISSION_MAX_RESUMES ?? 3)),
+  ghCommand: env.GH_COMMAND || "gh",
+  /** Esperar GitHub Actions tras publicar la rama y corregir si falla por los cambios de la misión. */
+  ciWaitEnabled: bool(env.CI_WAIT_ENABLED, true),
+  ciTimeoutMs: Math.max(1, Number(env.CI_TIMEOUT_MIN ?? 40)) * 60_000,
+  /** Cuánto esperar a que aparezca alguna ejecución antes de concluir que la rama no dispara workflows. */
+  ciAppearMs: Math.max(1, Number(env.CI_APPEAR_SEC ?? 180)) * 1000,
+  ciPollMs: Math.max(1, Number(env.CI_POLL_SEC ?? 20)) * 1000,
+  ciFixIterations: Math.max(0, Number(env.CI_FIX_ITERATIONS ?? 2)),
   /** Pausa (ms) tras handoffs/reuniones para que la oficina alcance a representarlos. 0 = sin pausa. */
   visualPacingMs: Math.max(0, Number(env.VISUAL_PACING_MS ?? 4000)),
   stepTimeoutMs: Math.max(1, Number(env.AGENT_STEP_TIMEOUT_MIN ?? 30)) * 60_000,

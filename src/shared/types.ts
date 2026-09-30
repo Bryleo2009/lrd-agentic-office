@@ -83,6 +83,7 @@ export type MissionStatus =
   | "running"
   | "qa"
   | "committing"
+  | "ci"
   | "done"
   | "failed"
   | "cancelled";
@@ -97,7 +98,7 @@ export interface MissionStep {
   task: string;
   dependsOn: string[];
   writes: boolean;
-  kind: "plan" | "agent" | "qa" | "review";
+  kind: "plan" | "agent" | "qa" | "review" | "ci";
   status: StepStatus;
   provider: Provider | null;
   sessionId: string | null;
@@ -118,6 +119,17 @@ export interface MissionRepo {
   commitSha: string | null;
   pushed: boolean;
   prUrl: string | null;
+}
+
+/** GitHub Actions de la rama publicada. */
+export interface CiInfo {
+  repositoryId: string;
+  /** pending (esperando) · success · failure · none (la rama no disparó workflows) · unavailable (gh no disponible) · timeout · unrelated (falla también en la base) */
+  state: "pending" | "success" | "failure" | "none" | "unavailable" | "timeout" | "unrelated";
+  detail: string;
+  url: string | null;
+  sha: string | null;
+  attempts: number;
 }
 
 /** Separador para pedir varios repos en una misión: "lrd-back+lrd-front". */
@@ -150,6 +162,8 @@ export interface Mission {
   prUrl: string | null;
   summary: string | null;
   planSource: "ai" | "rules" | null;
+  /** Resultado de GitHub Actions por repositorio publicado. */
+  ci: CiInfo[];
   /** Misión con varios repositorios: estado de cada uno (el primero es el principal). Vacío = un solo repo. */
   repos: MissionRepo[];
   createdAt: string;

@@ -77,6 +77,29 @@ function splitSummary(summary: string): { headline: string | null; body: string 
   return { headline: headline || null, body };
 }
 
+/** Estado de GitHub Actions de cada rama publicada, en lenguaje claro. */
+function ciLines(m: Mission): string[] {
+  const out: string[] = [];
+  for (const c of m.ci ?? []) {
+    const who = m.repos?.length > 1 ? `${c.repositoryId}: ` : "";
+    const fixes = c.attempts ? ` (tras ${c.attempts} corrección(es) del equipo)` : "";
+    const line =
+      c.state === "success"
+        ? `GitHub Actions: ${who}✅ en verde${fixes}.`
+        : c.state === "unrelated"
+          ? `GitHub Actions: ${who}⚠️ en rojo, pero no por esta misión — ${c.detail}`
+          : c.state === "none"
+            ? `GitHub Actions: ${who}⚠️ la rama no disparó ningún workflow, así que NO está verificado en CI. ${c.detail}`
+            : c.state === "unavailable"
+              ? `GitHub Actions: ${who}⚠️ no se pudo verificar. ${c.detail}`
+              : c.state === "pending"
+                ? `GitHub Actions: ${who}⏳ en curso.`
+                : `GitHub Actions: ${who}❌ ${c.detail}`;
+    out.push(`${line}${c.url ? ` ${c.url}` : ""}`);
+  }
+  return out;
+}
+
 /** Lo que Atlas le cuenta al usuario: qué pidió, en qué quedó, qué se entregó y qué sigue. */
 export function buildReport(m: Mission): string {
   const team = [...new Set(m.steps.filter((s) => s.kind === "agent").map((s) => agentOf(s.agentId).name))];
@@ -88,6 +111,10 @@ export function buildReport(m: Mission): string {
     out.push(`No pudimos terminarla. ${m.error ? `Motivo: ${m.error.split("\n")[0]}` : ""}`.trim());
     const done = m.steps.filter((s) => s.status === "done" && s.kind === "agent");
     if (done.length) out.push("", `Lo que sí alcanzamos a hacer: ${done.map((s) => `${agentOf(s.agentId).name} (${s.title})`).join(", ")}.`);
+    const branches = m.repos?.length > 1 ? m.repos.filter((r) => r.pushed && r.branch).map((r) => `${r.repositoryId}: \`${r.branch}\``) : m.pushed && m.branch ? [`\`${m.branch}\``] : [];
+    if (branches.length) out.push(`La rama quedó publicada para que la revises: ${branches.join(", ")}.`);
+    const ci = ciLines(m);
+    if (ci.length) out.push("", ...ci);
     out.push("", "¿Quieres que lo reintentemos, o prefieres ajustar el pedido primero?");
     return out.join("\n");
   }
@@ -113,6 +140,7 @@ export function buildReport(m: Mission): string {
   } else if (m.repositoryId !== NO_REPO) {
     out.push("Entrega: fue un análisis, no hubo cambios de código ni ramas nuevas.");
   }
+  out.push(...ciLines(m));
   out.push("", m.commitSha ? "¿La revisas y me dices si la dejamos así o ajustamos algo?" : "¿Quieres que profundice en algo o que preparemos una corrección?");
   return out.join("\n");
 }

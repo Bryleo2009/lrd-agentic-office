@@ -64,6 +64,7 @@ export const MISSION_STATUS: Record<MissionStatus, string> = {
   running: "En curso",
   qa: "QA",
   committing: "Commit",
+  ci: "Esperando GitHub Actions",
   done: "Completada",
   failed: "Fallida",
   cancelled: "Cancelada",
@@ -80,7 +81,7 @@ export const STEP_STATUS: Record<StepStatus, string> = {
 };
 
 export function isLive(s: MissionStatus): boolean {
-  return ["created", "preparing", "planning", "running", "qa", "committing"].includes(s);
+  return ["created", "preparing", "planning", "running", "qa", "committing", "ci"].includes(s);
 }
 
 /** Repositorio(s) de la misión para mostrar: "lrd-back + lrd-front" en misiones de varios repos. */

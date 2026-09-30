@@ -50,6 +50,9 @@ const env = {
   FAKE_CALLS: calls,
   FAKE_AGENT_MS: "6000",
   CODEX_HOME: path.join(root, "codex-home"),
+  GH_COMMAND: path.resolve("tests/fixtures/fake-gh.mjs"),
+  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front }),
+  CI_POLL_SEC: "1",
 };
 
 function startServer(): ChildProcess {

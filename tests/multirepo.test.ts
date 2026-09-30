@@ -52,6 +52,10 @@ Object.assign(process.env, {
   FAKE_TIMELINE: timeline,
   QA_LOG: qaLog,
   CODEX_HOME: path.join(root, "codex-home"),
+  GH_COMMAND: path.resolve("tests/fixtures/fake-gh.mjs"),
+  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front }),
+  CI_POLL_SEC: "1",
+  CI_APPEAR_SEC: "2",
 });
 
 test("misión back + front: Diego y Mica en paralelo, QA en carriles paralelos, una rama publicada por repo", { timeout: 90_000 }, async () => {
@@ -147,4 +151,33 @@ test("en Automático toma de la misión el repo, la rama base y el nombre de ram
   assert.equal(m.status, "done", m.error ?? "");
   assert.equal(m.branch, "agentic/feature/totales");
   assert.match(git(["branch", "--list", "agentic/feature/totales"], back), /agentic\/feature\/totales/);
+});
+
+test("GitHub Actions: espera el verde; si falla por la misión, el desarrollador corrige, se publica y queda en verde", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const wait = async (id: string) => {
+    let m = repo.getMission(id)!;
+    for (let i = 0; i < 400 && !["done", "failed"].includes(m.status); i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      m = repo.getMission(id)!;
+    }
+    return m;
+  };
+  process.env.FAKE_GH_MODE = "fail-until-fix";
+  const m = await wait((await orchestrator.createMission({ prompt: "Implementa el filtro en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id);
+  assert.equal(m.status, "done", m.error ?? "");
+  const ci = m.ci.find((c) => c.repositoryId === "lrd-front")!;
+  assert.equal(ci.state, "success");
+  assert.equal(ci.attempts, 1, "hubo una corrección");
+  assert.match(git(["show", "--stat", "--format=%s", `refs/heads/${m.branch}`], front), /fix\(ci\)[\s\S]*ci-fixed\.txt/, "el commit de corrección está publicado");
+  assert.ok(m.steps.some((s) => s.kind === "ci" && s.status === "done"));
+
+  // Si la rama no dispara workflows, se documenta y NO se declara verde.
+  process.env.FAKE_GH_MODE = "none";
+  const n = await wait((await orchestrator.createMission({ prompt: "Implementa el filtro en `x/lrd-front` otra vez", repositoryId: "lrd-front", engine: "codex" })).id);
+  assert.equal(n.status, "done");
+  assert.equal(n.ci[0].state, "none");
+  assert.match(n.ci[0].detail, /No se declara verde/);
+  delete process.env.FAKE_GH_MODE;
 });

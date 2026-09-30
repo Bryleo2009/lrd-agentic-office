@@ -17,13 +17,13 @@ function safeList(v: unknown): string[] {
 // ---------- missions ----------
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
-  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []) }).run();
+  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []) }).run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  const { mcpServers, repos, ...rest } = patch;
+  const { mcpServers, repos, ci, ...rest } = patch;
   db.update(schema.missions)
-    .set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), ...(repos ? { repos: JSON.stringify(repos) } : {}), updatedAt: now() })
+    .set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), ...(repos ? { repos: JSON.stringify(repos) } : {}), ...(ci ? { ci: JSON.stringify(ci) } : {}), updatedAt: now() })
     .where(eq(schema.missions.id, id))
     .run();
 }
@@ -68,7 +68,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {
@@ -218,7 +218,7 @@ export function upsertRepository(r: { id: string; name: string; github: string; 
 export function interruptedMissionIds(): string[] {
   return (
     sqlite
-      .prepare(`SELECT id FROM missions WHERE status IN ('created','preparing','planning','running','qa','committing') ORDER BY created_at`)
+      .prepare(`SELECT id FROM missions WHERE status IN ('created','preparing','planning','running','qa','committing','ci') ORDER BY created_at`)
       .all() as { id: string }[]
   ).map((r) => r.id);
 }

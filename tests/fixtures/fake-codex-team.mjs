@@ -27,6 +27,11 @@ process.stdin.on("end", () => {
     ] };
     return say("```json\n" + JSON.stringify(plan) + "\n```");
   }
+  if (input.includes("GitHub Actions falló en")) {
+    fs.writeFileSync(path.join(process.cwd(), "ci-fixed.txt"), "arreglado\n");
+    log({ kind: "ci-fix" });
+    return say("Corregí lo que rompía el lint.\nRESUMEN: CI corregido");
+  }
   if (input.includes("Puedes modificar archivos")) {
     const who = input.includes("Pantalla de totales") ? "front" : "back";
     const t0 = Date.now();
