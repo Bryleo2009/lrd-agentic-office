@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { deliveredReports, isReportable } from "./reports";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId, AgentProfile, AgentSessionInfo, Mission, PublicConfig, RepositoryConfig, RuntimeStatus, Snapshot } from "../../shared/types";
 
@@ -28,6 +29,10 @@ interface State {
   newMissionOpen: boolean;
   feedOpen: boolean;
   toast: { text: string; tone: "error" | "info" } | null;
+  /** Misiones terminadas cuyo informe Atlas aún no entregó al usuario (más antigua primero). */
+  pendingReports: string[];
+  /** Pestaña que el panel del agente debe abrir (se consume al aplicarse). */
+  drawerTab: "activity" | "chat" | "terminal" | "profile" | null;
 
   hydrate(s: Snapshot): void;
   addEvent(e: AgentRuntimeEvent): void;
@@ -44,6 +49,8 @@ interface State {
   pushChat(l: ChatLine): void;
   setChatBusy(id: AgentId, v: boolean): void;
   showToast(text: string, tone?: "error" | "info"): void;
+  removePendingReport(id: string): void;
+  setDrawerTab(t: State["drawerTab"]): void;
 }
 
 const MAX_EVENTS = 600;
@@ -65,6 +72,8 @@ export const useStore = create<State>((set, get) => ({
   newMissionOpen: false,
   feedOpen: false,
   toast: null,
+  pendingReports: [],
+  drawerTab: null,
 
   hydrate(s) {
     const missions: Record<string, Mission> = {};
@@ -78,7 +87,11 @@ export const useStore = create<State>((set, get) => ({
       if (e.type === "AGENT_MESSAGE") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "agent", text: e.detail ?? e.title, at: e.timestamp });
       if (e.type === "AGENT_ERROR") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "system", text: `${e.title}${e.detail ? `\n${e.detail}` : ""}`, at: e.timestamp });
     }
+    for (const r of deliveredReports()) (chats.atlas ??= []).push({ id: r.id, agentId: "atlas", from: "agent", text: r.text, at: r.at });
+    chats.atlas?.sort((a, b) => a.at.localeCompare(b.at));
+    const pendingReports = s.missions.filter(isReportable).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).map((m) => m.id);
     set({
+      pendingReports,
       runtime: s.runtime,
       missions,
       missionOrder: s.missions.map((m) => m.id),
@@ -105,7 +118,15 @@ export const useStore = create<State>((set, get) => ({
   },
   upsertMission(m) {
     const order = get().missionOrder.includes(m.id) ? get().missionOrder : [m.id, ...get().missionOrder];
-    set({ missions: { ...get().missions, [m.id]: m }, missionOrder: order });
+    const pending = get().pendingReports;
+    const pendingReports = isReportable(m) && !pending.includes(m.id) ? [...pending, m.id] : pending;
+    set({ missions: { ...get().missions, [m.id]: m }, missionOrder: order, pendingReports });
+  },
+  removePendingReport(id) {
+    set({ pendingReports: get().pendingReports.filter((x) => x !== id) });
+  },
+  setDrawerTab(drawerTab) {
+    set({ drawerTab });
   },
   setRuntime(runtime) {
     set({ runtime });

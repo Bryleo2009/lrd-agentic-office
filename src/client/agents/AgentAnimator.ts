@@ -1,7 +1,7 @@
 import { damp } from "../office/iso";
 import type { RigView } from "./CharacterRig";
 
-export type Action = "idle" | "type" | "read" | "think" | "talk" | "test" | "celebrate" | "blocked" | "coffee";
+export type Action = "idle" | "type" | "read" | "think" | "talk" | "test" | "celebrate" | "blocked" | "coffee" | "wave";
 
 interface Pose {
   thighN: number;
@@ -188,6 +188,18 @@ export class AgentAnimator {
         p.foreF = -0.3;
         p.headRot = -0.12;
         if (this.sit < 0.3 && at < 1.6) this.bounce = Math.abs(Math.sin(at * 7.5)) * 5 * (1 - at / 1.6);
+        break;
+      }
+      case "wave": {
+        // Brazo cercano en alto moviendo la mano de lado a lado; mira al frente con un pequeño rebote.
+        const up = Math.min(1, at / 0.25);
+        p.upperN = -2.7 * up;
+        p.foreN = -0.55 + 0.55 * Math.sin(t * 9);
+        p.upperF = 0.05;
+        p.foreF = -0.15;
+        p.headRot = -0.08 + 0.05 * Math.sin(t * 4.5);
+        p.headY = 0.4 * Math.sin(t * 4.5);
+        if (this.sit < 0.3) this.bounce = Math.max(0, Math.sin(t * 4.5)) * 1.6;
         break;
       }
       case "blocked":

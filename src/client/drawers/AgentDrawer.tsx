@@ -32,6 +32,7 @@ const ACTION_LABEL: Record<string, string> = {
   blocked: "Bloqueado",
   idle: "Esperando",
   coffee: "Café",
+  wave: "Saludándote: tiene un informe para ti",
 };
 
 export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | null; onChatSent: (id: AgentId) => void }) {
@@ -39,6 +40,12 @@ export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | nul
   useStore((s) => s.team);
   const select = useStore((s) => s.select);
   const [tab, setTab] = useState<Tab>("activity");
+  const drawerTab = useStore((s) => s.drawerTab);
+  useEffect(() => {
+    if (!drawerTab) return;
+    setTab(drawerTab);
+    useStore.getState().setDrawerTab(null);
+  }, [drawerTab]);
   const [portrait, setPortrait] = useState<string | null>(null);
   const [live, setLive] = useState<{ state: string; mode: string; action: string } | null>(null);
 

@@ -6,6 +6,9 @@ import { CancelToken, type AgentEntity } from "./AgentEntity";
 import type { StatusTone } from "./AgentRenderer";
 import { AgentFSM, type Seat, type WorldApi } from "./AgentFSM";
 
+/** Punto del pasillo frente a la sala de control, bien visible, desde donde Atlas saluda. */
+const CALL_SPOT: Vec = { x: 5.5, y: 11.8 };
+
 export type Station = "desk" | "qa_terminal" | "mission_screen" | "meeting";
 
 export type Scenario =
@@ -37,6 +40,9 @@ export class AgentBrain {
   private clock = 0;
   meetingSeat: Seat | null = null;
   private holdUntil = 0;
+  /** Llamando al usuario (informe pendiente): texto de la burbuja que repite mientras saluda. */
+  private calling: string | null = null;
+  private lastCallSay = -99;
   /** Métricas para validación */
   realActions = 0;
 
@@ -50,7 +56,30 @@ export class AgentBrain {
   }
 
   hasRealTask(): boolean {
-    return this.real !== null || this.scenarios.length > 0 || this.clock < this.holdUntil;
+    return this.real !== null || this.scenarios.length > 0 || this.clock < this.holdUntil || this.calling !== null;
+  }
+
+  /**
+   * Llamar la atención del usuario: sale al pasillo, mira al frente y saluda con la mano,
+   * repitiendo `text` cada pocos segundos hasta que se llame a setCalling(null).
+   * Una tarea real (nueva misión) tiene prioridad; al terminarla vuelve a llamar.
+   */
+  setCalling(text: string | null): void {
+    if (text === this.calling) return;
+    const was = this.calling;
+    this.calling = text;
+    this.e.renderer.setAttention(text !== null);
+    if (text) {
+      this.lastCallSay = -99;
+      if (this.mode !== "real") this.preempt();
+    } else if (was && !this.real) {
+      this.e.setAction("idle");
+      this.e.renderer.setTone("none");
+    }
+  }
+
+  get isCalling(): boolean {
+    return this.calling !== null;
   }
 
   get modeName() {
@@ -83,6 +112,7 @@ export class AgentBrain {
 
   /** Otro agente se acerca a hablar: detenerse, mirarlo y conversar. */
   engage(other: AgentEntity, seconds: number, action: Action = "talk"): boolean {
+    if (this.calling) return false;
     if (this.mode === "real" && this.real && this.real.where !== "desk") return false;
     if (this.mode === "ambient") {
       this.token?.cancel();
@@ -185,6 +215,23 @@ export class AgentBrain {
             if (t.facing !== undefined) this.e.face(t.facing);
           }
           this.applyAction();
+        } else if (this.calling) {
+          if (Math.hypot(this.e.pos.x - CALL_SPOT.x, this.e.pos.y - CALL_SPOT.y) > 0.15) {
+            this.e.setAction("idle");
+            const ok = await this.e.walkTo(CALL_SPOT, token);
+            if (!ok) {
+              if (token.cancelled) break;
+              await this.e.wait(0.5, token);
+              continue;
+            }
+          }
+          this.e.face(1);
+          this.e.setAction("wave");
+          this.e.renderer.setTone("success");
+          if (this.clock - this.lastCallSay > 7) {
+            this.lastCallSay = this.clock;
+            this.e.say(this.calling, "success", 5);
+          }
         }
         await this.e.wait(0.3, token);
       }

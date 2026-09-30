@@ -985,6 +985,47 @@ code {
   gap: 8px;
   margin-top: 14px;
 }
+.report-call {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35), 0 0 0 0 rgba(245, 158, 11, 0.5);
+  animation: report-pulse 2s infinite;
+}
+.report-call b {
+  color: #fbbf24;
+}
+.report-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #fff;
+  font-weight: 800;
+}
+@keyframes report-pulse {
+  70% {
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35), 0 0 0 12px rgba(245, 158, 11, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .report-call {
+    animation: none;
+  }
+}
 .toast {
   position: fixed;
   bottom: 70px;

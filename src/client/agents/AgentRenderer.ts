@@ -55,6 +55,10 @@ export class AgentRenderer {
   private currentSprite: AnimatedSprite | null = null;
 
   private tagName: Text | null = null;
+  private tagWidth = 0;
+  /** Insignia "!" pulsante: el agente tiene algo pendiente para el usuario. */
+  private attention = new Container();
+  private attentionTime = 0;
 
   constructor(public def: AgentDefinition, appearance: Appearance) {
     this.front = buildRigView(appearance, false);
@@ -76,6 +80,15 @@ export class AgentRenderer {
     this.bubble.visible = false;
     this.overlay.addChild(this.bubble);
 
+    const badge = new Graphics().circle(0, 0, 9).fill(0xf59e0b).stroke({ width: 2, color: 0xffffff });
+    const mark = new Text({ text: "!", style: new TextStyle({ fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, fontWeight: "800", fill: 0xffffff }), resolution: 3 });
+    mark.anchor.set(0.5);
+    this.attention.addChild(badge, mark);
+    this.attention.visible = false;
+    this.attention.eventMode = "static";
+    this.attention.cursor = "pointer";
+    this.overlay.addChild(this.attention);
+
     this.body.eventMode = "static";
     this.body.cursor = "pointer";
     this.body.hitArea = { contains: (x: number, y: number) => x > -14 && x < 14 && y > -68 && y < 4 };
@@ -93,6 +106,7 @@ export class AgentRenderer {
     name.position.set(16, -7.5);
     this.tagName = name;
     const w = name.width + 26;
+    this.tagWidth = w;
     this.tagBg.clear().roundRect(0, -10.5, w, 21, 10.5).fill({ color: 0xffffff, alpha: 0.95 }).stroke({ width: 1, color: 0xe2e8f0 });
     this.tagDot.clear().circle(9, 0, 3.6).fill(parseInt(def.color.slice(1), 16));
     this.tag.addChild(name);
@@ -115,6 +129,12 @@ export class AgentRenderer {
   onClick(fn: () => void): void {
     this.body.on("pointertap", fn);
     this.tag.on("pointertap", fn);
+    this.attention.on("pointertap", fn);
+  }
+
+  setAttention(on: boolean): void {
+    if (on && !this.attention.visible) this.attentionTime = 0;
+    this.attention.visible = on;
   }
 
   /** Arte reemplazable: assets/characters/<id>/spritesheet.json */
@@ -213,6 +233,12 @@ export class AgentRenderer {
     this.tag.position.set(screenX, headTop - 6 * inv);
     this.tag.scale.set(inv * 0.95);
     this.tagBg.alpha = this.selected ? 1 : 0.96;
+    if (this.attention.visible) {
+      this.attentionTime += dt;
+      const pulse = 1 + 0.18 * Math.abs(Math.sin(this.attentionTime * 3.2));
+      this.attention.position.set(screenX + (this.tagWidth / 2 + 6) * inv * 0.95, headTop - 12 * inv);
+      this.attention.scale.set(inv * pulse);
+    }
     if (this.bubble.visible) {
       this.bubbleTime += dt;
       const fadeIn = Math.min(1, this.bubbleTime / 0.18);
