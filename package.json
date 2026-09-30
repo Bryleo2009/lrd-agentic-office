@@ -11,7 +11,8 @@
     "doctor": "tsx scripts/doctor.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
-    "validate:visual": "node scripts/validate-visual.mjs"
+    "validate:visual": "node scripts/validate-visual.mjs",
+    "doctor:probar": "tsx scripts/doctor.ts --probar"
   },
   "engines": {
     "node": ">=20"

@@ -76,6 +76,7 @@ export const useStore = create<State>((set, get) => ({
       if (!meta.chat || !e.agentId) continue;
       if (e.type === "MESSAGE_SENT" && meta.fromUser) (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "user", text: e.detail ?? e.title, at: e.timestamp });
       if (e.type === "AGENT_MESSAGE") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "agent", text: e.detail ?? e.title, at: e.timestamp });
+      if (e.type === "AGENT_ERROR") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "system", text: `${e.title}${e.detail ? `\n${e.detail}` : ""}`, at: e.timestamp });
     }
     set({
       runtime: s.runtime,

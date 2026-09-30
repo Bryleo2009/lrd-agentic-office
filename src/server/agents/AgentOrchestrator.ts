@@ -632,14 +632,19 @@ No modifiques archivos. Responde en español, conciso (máx. 15 líneas). Termin
 
   // ------------------------------------------------------------------
   /** Chat real con la sesión del agente. */
-  async chat(agentId: AgentId, message: string, missionId?: string | null): Promise<void> {
+  async chat(agentId: AgentId, message: string, missionId?: string | null, engine: EngineChoice = "auto"): Promise<void> {
     if (this.isAgentBusy(agentId)) throw new MissionError(`${getAgent(agentId).name} está ejecutando un paso de misión. Espera a que termine.`, 409);
     const missions = repo.listMissions(20);
     const mission = (missionId ? repo.getMission(missionId) : null) ?? missions.find((m) => m.steps.some((s) => s.agentId === agentId)) ?? null;
     await runtime.detect();
-    const existing = mission ? sessions.get(mission.id, agentId) : sessions.get(null, agentId);
+    const prior = mission ? sessions.get(mission.id, agentId) : sessions.get(null, agentId);
+    // Motor: el elegido en el chat > el preferido del empleado > el de su misión > el por defecto.
+    const pref = getAgent(agentId).engine;
     const provider: Provider =
-      existing?.session.provider ?? (mission ? runtime.forAgent(agentId, mission.provider, mission.engine) : runtime.resolve("auto"));
+      engine === "codex" || engine === "claude"
+        ? engine
+        : prior?.session.provider ?? (pref && runtime.isUsable(pref) ? pref : mission ? runtime.forAgent(agentId, mission.provider, mission.engine) : runtime.resolve("auto"));
+    const existing = prior && prior.session.provider === provider ? prior : undefined;
     if (!runtime.isUsable(provider)) {
       const st = runtime.snapshot().find((s) => s.provider === provider);
       throw new MissionError(`${st?.label ?? provider} no disponible: ${st?.message ?? ""}`, 409);

@@ -77,6 +77,31 @@ for (const r of repositories) {
   const missing = r.allowedBases.filter((b) => !found.includes(b));
   missing.length ? warn(`${r.github}: ramas ${found.join(", ")} · faltan ${missing.join(", ")}`) : ok(`${r.github}: ${found.join(", ")}`);
 }
+// Prueba real opcional: npm run doctor -- --probar  (consume una respuesta mínima de tu suscripción)
+if (process.argv.includes("--probar")) {
+  const os = await import("node:os");
+  const path = await import("node:path");
+  console.log("\n  Prueba real de motores (igual que la oficina, sin MCP):");
+  for (const ex of [new CodexCliExecutor(), new ClaudeCodeExecutor()]) {
+    const st = await ex.checkAvailability(true);
+    if (!st.enabled || !st.installed || st.authenticated === false) continue;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lrd-probe-"));
+    try {
+      const s = await ex.startSession({ missionId: null, agentId: "atlas", cwd: dir, permission: "read-only", runDir: path.join(dir, "runs"), timeoutMs: 120000, mcpAllow: [] });
+      let final: { ok: boolean; text: string } = { ok: false, text: "sin respuesta" };
+      for await (const e of ex.executeTask(s, { prompt: "Responde solo con la palabra OK.", title: "probe" })) {
+        if (e.type === "SESSION_STARTED") info(`${st.label}: ${e.detail}`);
+        if (e.type === "AGENT_STATUS" && e.status === "warning") warn(`${st.label}: ${e.title}`);
+        if (e.type === "AGENT_FINISHED") final = { ok: true, text: (e.finalText ?? e.detail ?? "").trim() };
+        if (e.type === "AGENT_ERROR") final = { ok: false, text: `${e.title}\n${e.detail ?? ""}` };
+      }
+      final.ok ? ok(`${st.label} respondió: ${final.text.slice(0, 60)}`) : bad(`${st.label} falló:\n${final.text.split("\n").map((l) => "      " + l).join("\n")}`);
+    } catch (e) {
+      bad(`${st.label}: ${(e as Error).message}`);
+    }
+  }
+}
+
 if (!fs.existsSync(".env")) warn("No existe .env (se usan valores por defecto). Copia .env.example a .env");
 console.log("");
 process.exit(usable.length ? 0 : 1);

@@ -23,6 +23,7 @@ export function EventRow({ e, onAgent }: { e: AgentRuntimeEvent; onAgent?: (id: 
       <span className="ev-type">{typeLabel(e.type)}</span>
       <span className="ev-title" title={e.detail ?? e.title}>
         {e.title}
+        {eventTone(e) === "err" && e.detail ? <span className="ev-detail"> — {e.detail.split("\n").find((l) => l.trim())}</span> : null}
       </span>
     </div>
   );

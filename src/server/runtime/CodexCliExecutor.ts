@@ -1,4 +1,4 @@
-import type { RuntimeStatus } from "../../shared/types";
+import { isToolMcp, type RuntimeStatus } from "../../shared/types";
 import { config } from "../config";
 import type { AgentSession, AgentTask } from "./AgentExecutor";
 import { BaseCliExecutor, type Invocation } from "./BaseCliExecutor";
@@ -100,6 +100,37 @@ export class CodexCliExecutor extends BaseCliExecutor {
   private mcpArgs(session: AgentSession): string[] {
     const allow = new Set(session.config.mcpAllow);
     return (this.status?.mcpServers ?? []).filter((m) => m.enabled && !allow.has(m.name) && /^[\w-]+$/.test(m.name)).flatMap((m) => ["-c", `mcp_servers.${m.name}.enabled=false`]);
+  }
+
+  /**
+   * Algunas entradas MCP (p. ej. herramientas integradas como node_repl) no aceptan el override
+   * `mcp_servers.<n>.enabled=false`. Si el error lo menciona y es una herramienta (no fuente de datos),
+   * se reintenta sin ese override. Nunca se relaja el bloqueo de una fuente de datos.
+   */
+  protected recoverFromStartupFailure(inv: Invocation, stderr: string): { inv: Invocation; note: string } | null {
+    const names: string[] = [];
+    for (let i = 0; i < inv.args.length - 1; i++) {
+      const m = inv.args[i] === "-c" ? inv.args[i + 1].match(/^mcp_servers\.([\w-]+)\.enabled=false$/) : null;
+      if (m && stderr.includes(m[1])) names.push(m[1]);
+    }
+    const generic = !names.length && /mcp_servers/i.test(stderr);
+    if (!names.length && !generic) return null;
+    const drop = generic
+      ? inv.args.flatMap((a, i) => (inv.args[i - 1] === "-c" && /^mcp_servers\.([\w-]+)\.enabled=false$/.test(a) ? [a.split(".")[1]] : [])).filter(isToolMcp)
+      : names;
+    if (!drop.length || drop.some((n) => !isToolMcp(n))) return null;
+    const args: string[] = [];
+    for (let i = 0; i < inv.args.length; i++) {
+      if (inv.args[i] === "-c" && drop.some((n) => inv.args[i + 1] === `mcp_servers.${n}.enabled=false`)) {
+        i++;
+        continue;
+      }
+      args.push(inv.args[i]);
+    }
+    return {
+      inv: { ...inv, args, parser: new CodexJsonParser((inv.parser as CodexJsonParser).cwd) },
+      note: `Codex no aceptó desactivar ${drop.join(", ")} (herramienta integrada); se reintenta sin ese ajuste`,
+    };
   }
 
   private save(st: RuntimeStatus): RuntimeStatus {

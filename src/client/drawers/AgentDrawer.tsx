@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { agentOf as getAgent } from "../app/team";
+import { agentOf as getAgent, useAgentProfile } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId } from "../../shared/types";
+import type { AgentId, EngineChoice, Provider } from "../../shared/types";
 import { api } from "../app/api";
 import { eventTone, isLive, timeOf } from "../app/format";
 import { useStore } from "../app/store";
@@ -168,7 +168,16 @@ function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) 
   const push = useStore((s) => s.pushChat);
   const setBusy = useStore((s) => s.setChatBusy);
   const [text, setText] = useState("");
+  const runtime = useStore((s) => s.runtime);
+  const config = useStore((s) => s.config);
+  const pref = useAgentProfile(agentId).engine;
+  const [engine, setEngine] = useState<EngineChoice>("auto");
   const endRef = useRef<HTMLDivElement>(null);
+  const ok = (p: Provider) => {
+    const r = runtime.find((x) => x.provider === p);
+    return !!r && r.enabled && r.installed && r.authenticated !== false;
+  };
+  const autoName = (pref ?? config?.aiEngineDefault) === "claude" ? "Claude Code" : "Codex";
   useEffect(() => endRef.current?.scrollIntoView({ block: "end" }), [chats.length, busy]);
 
   const send = async () => {
@@ -179,7 +188,7 @@ function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) 
     setBusy(agentId, true);
     onSent(agentId);
     try {
-      await api.chat(agentId, msg);
+      await api.chat(agentId, msg, null, engine);
     } catch (e) {
       setBusy(agentId, false);
       push({ id: `e-${Date.now()}`, agentId, from: "system", text: (e as Error).message, at: new Date().toISOString() });
@@ -201,6 +210,14 @@ function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) 
         ))}
         {busy && <div className="msg agent typing">…</div>}
         <div ref={endRef} />
+      </div>
+      <div className="chat-engine">
+        <span>Motor para este chat</span>
+        <select value={engine} onChange={(e) => setEngine(e.target.value as EngineChoice)}>
+          <option value="auto">Automático ({autoName})</option>
+          <option value="codex" disabled={!ok("codex")}>Codex CLI{ok("codex") ? "" : " · no disponible"}</option>
+          <option value="claude" disabled={!ok("claude")}>Claude Code{ok("claude") ? "" : " · no disponible"}</option>
+        </select>
       </div>
       <div className="chat-input">
         <textarea

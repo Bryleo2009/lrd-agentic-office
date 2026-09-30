@@ -16,6 +16,10 @@ import { registerWs } from "./websocket/wsHub";
 import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
 
 void _sessions;
+
+// Red de seguridad: un error inesperado se registra, pero no tumba la oficina.
+process.on("uncaughtException", (e) => console.error("[lrd] error no controlado:", e));
+process.on("unhandledRejection", (e) => console.error("[lrd] promesa rechazada:", e));
 assertApiDisabled();
 
 const app = Fastify({ logger: { level: config.isProd ? "info" : "warn" } });
@@ -71,9 +75,9 @@ app.post("/api/missions/:id/cancel", async (req) => {
 app.post("/api/agents/:id/chat", async (req) => {
   const id = (req.params as { id: string }).id;
   if (!isAgentId(id)) throw new MissionError("Agente desconocido", 404);
-  const b = (req.body ?? {}) as { message?: string; missionId?: string | null };
+  const b = (req.body ?? {}) as { message?: string; missionId?: string | null; engine?: EngineChoice };
   if (!b.message?.trim()) throw new MissionError("Mensaje vacío");
-  await orchestrator.chat(id, b.message.trim(), b.missionId ?? null);
+  await orchestrator.chat(id, b.message.trim(), b.missionId ?? null, b.engine === "codex" || b.engine === "claude" ? b.engine : "auto");
   return { ok: true };
 });
 

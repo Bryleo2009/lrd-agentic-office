@@ -16,7 +16,7 @@ export class CodexJsonParser {
   private cmdKinds = new Map<string, { kind: string; cmd: string }>();
   failed = false;
 
-  constructor(private cwd: string) {}
+  constructor(readonly cwd: string) {}
 
   parseLine(line: string): ExecutorEvent[] {
     let o: any;

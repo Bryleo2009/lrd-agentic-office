@@ -73,6 +73,7 @@ export function run(
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
+    child.stdin?.on("error", () => undefined);
     if (opts.input !== undefined) child.stdin?.end(opts.input);
     else child.stdin?.end();
   });

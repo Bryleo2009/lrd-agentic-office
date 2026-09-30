@@ -12,8 +12,8 @@ export const api = {
   createMission: (b: { prompt: string; repositoryId: string; baseBranch: string | null; engine: EngineChoice; allowMcp: boolean; mcpServers?: string[] }) =>
     req<Mission>("/api/missions", { method: "POST", body: JSON.stringify(b) }),
   cancelMission: (id: string) => req<{ ok: true }>(`/api/missions/${id}/cancel`, { method: "POST", body: "{}" }),
-  chat: (agentId: AgentId, message: string, missionId?: string | null) =>
-    req<{ ok: true }>(`/api/agents/${agentId}/chat`, { method: "POST", body: JSON.stringify({ message, missionId }) }),
+  chat: (agentId: AgentId, message: string, missionId?: string | null, engine: EngineChoice = "auto") =>
+    req<{ ok: true }>(`/api/agents/${agentId}/chat`, { method: "POST", body: JSON.stringify({ message, missionId, engine }) }),
   agentEvents: (agentId: AgentId) => req<AgentRuntimeEvent[]>(`/api/agents/${agentId}/events`),
   event: (id: string) => req<AgentRuntimeEvent>(`/api/events/${id}`),
   updateProfile: (id: AgentId, patch: Partial<AgentProfile>) => req<AgentProfile>(`/api/team/${id}`, { method: "PUT", body: JSON.stringify(patch) }),

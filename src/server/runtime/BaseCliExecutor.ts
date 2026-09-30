@@ -28,6 +28,15 @@ export abstract class BaseCliExecutor implements AgentExecutor {
   protected abstract buildTask(session: AgentSession, task: AgentTask): Invocation;
   protected abstract buildMessage(session: AgentSession, message: string): Invocation;
 
+  /**
+   * Si el CLI falla al arrancar (antes de producir eventos), el executor puede proponer
+   * una invocación corregida (p. ej. sin un override de configuración que la versión no acepta).
+   * Devuelve null si no hay corrección segura.
+   */
+  protected recoverFromStartupFailure(_inv: Invocation, _stderr: string, _session: AgentSession): { inv: Invocation; note: string } | null {
+    return null;
+  }
+
   async startSession(cfg: SessionConfig): Promise<AgentSession> {
     const st = await this.checkAvailability();
     if (!st.installed) throw new ExecutorUnavailableError(`${st.label} no está instalado (${this.command}).`);
@@ -58,7 +67,7 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     session.process = null;
   }
 
-  private async *runInvocation(session: AgentSession, inv: Invocation, promptForLog: string): AsyncGenerator<ExecutorEvent> {
+  private async *runInvocation(session: AgentSession, inv: Invocation, promptForLog: string, attempt = 0): AsyncGenerator<ExecutorEvent> {
     const { cwd, runDir, timeoutMs } = session.config;
     fs.mkdirSync(runDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -71,6 +80,9 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     let stderr = "";
     let spawnError: string | null = null;
     child.on("error", (e) => (spawnError = e.message));
+    // Si el CLI termina antes de leer el prompt, escribir en stdin da EPIPE/EOF:
+    // se ignora aquí (el código de salida y stderr reportan el error real) para que el servidor no caiga.
+    child.stdin?.on("error", () => undefined);
     child.stderr?.on("data", (d) => {
       stderr += d.toString();
       if (stderr.length > 20000) stderr = stderr.slice(-20000);
@@ -93,12 +105,14 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     };
 
     let terminal = false;
+    let produced = 0;
     try {
       for await (const line of readLines(child)) {
         log.write(line + "\n");
         for (const ev of inv.parser.parseLine(line)) {
           if (inv.parser.sessionId && inv.parser.sessionId !== session.cliSessionId) session.cliSessionId = inv.parser.sessionId;
           if (ev.type === "AGENT_FINISHED" || ev.type === "AGENT_ERROR") terminal = true;
+          produced++;
           yield ev;
         }
       }
@@ -108,7 +122,9 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     }
     const code = await waitExit(child);
     session.process = null;
-    session.hasTurn = true;
+    if (stderr.trim()) fs.writeFileSync(logFile.replace(/\.jsonl$/, ".stderr.log"), stderr);
+    // Sólo hay sesión reanudable si el CLI realmente arrancó.
+    if (produced > 0 || inv.parser.sessionId) session.hasTurn = true;
     if (inv.parser.sessionId) session.cliSessionId = inv.parser.sessionId;
 
     if (session.cancelled) {
@@ -122,6 +138,14 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     if (spawnError) {
       yield { type: "AGENT_ERROR", title: `No se pudo ejecutar ${this.command}`, detail: spawnError, status: "error" };
       return;
+    }
+    if (code !== 0 && !terminal && produced === 0 && attempt === 0) {
+      const fix = this.recoverFromStartupFailure(inv, stderr, session);
+      if (fix) {
+        yield { type: "AGENT_STATUS", title: fix.note, detail: tail(stderr, 1500), status: "warning" };
+        yield* this.runInvocation(session, fix.inv, promptForLog, attempt + 1);
+        return;
+      }
     }
     if (code !== 0 && !terminal) {
       yield { type: "AGENT_ERROR", title: `${this.command} terminó con código ${code}`, detail: tail(stderr, 3000) || "(sin stderr)", status: "error", metadata: { exitCode: code } };
