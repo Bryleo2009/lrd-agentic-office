@@ -56,8 +56,14 @@ src/
       AgentOrchestrator.ts    ciclo de vida de misión (git → plan → DAG → QA → commit → push/PR)
       AgentSession.ts         registro de sesiones por (misión, agente)
       AgentMessageBus.ts      handoffs reales entre agentes (+ reuniones)
+    maintenance.ts            limpieza de worktrees/logs de misiones terminadas (RETENTION_DAYS)
+    metrics.ts                uso por motor (pasos, minutos, fallas, límites) desde SQLite
     missions/
       MissionPlanner.ts       Atlas genera un plan real (JSON) con el motor IA
+      questions.ts            "PREGUNTA:/OPCIONES:" de los agentes y lectura de respuestas naturales
+      guides.ts               tipo de tarea (ci-fix / data-lookup) → config/guides/<tipo>.md
+      secrets.ts              revisión de secretos y migraciones en el diff antes de publicar
+      lessons.ts              memoria del equipo + medición (usos, bien/mal, repeticiones, correcciones)
       MissionDagExecutor.ts   ejecuta nodos en paralelo respetando dependencias
       qa.ts                   detección y ejecución real de build/tests
     integrations/git/GitWorktreeManager.ts
@@ -247,6 +253,7 @@ Los prompts prohíben a los CLIs hacer `git push/commit`; además Claude se lanz
 ## 13. Modelo de datos (SQLite / Drizzle)
 
 `repositories, branches, missions, mission_steps, agent_sessions, runtime_events, handoffs, deliveries`.
+`missions` guarda además `questions`, `task_kind` y `lesson_ids` (JSON).
 No se persisten API keys, OAuth tokens, contraseñas ni razonamiento.
 
 ## 14. Seguridad
@@ -271,3 +278,29 @@ No se persisten API keys, OAuth tokens, contraseñas ni razonamiento.
   Las llamadas MCP se muestran como "Consultando datos: servidor · herramienta".
 * API: `GET/PUT /api/team/:id`, `POST /api/team/:id/reset`, `GET /api/repositories`, `PUT /api/repositories/:id/local-path`.
   WS: `{kind:"team"}`, `{kind:"repositories"}` → la oficina reconstruye el rig del personaje en vivo.
+
+## 16. Preguntas, guías, aprendizaje medido, seguridad y mantenimiento
+
+* **Preguntas (pausa y respuesta).** `runAgentAsking()` ejecuta al agente; si su respuesta trae `PREGUNTA: …`
+  (`OPCIONES: a | b`), `ask()` guarda una `MissionQuestion` en la misión, pone la misión en `waiting` y el paso en
+  `waiting`, emite `AGENT_WAITING` y espera. `POST /api/missions/:id/questions/:qid/answer` (o escribir en el chat del
+  agente) la responde; el agente continúa con su prompt + la respuesta. Cada pregunta tiene una clave estable
+  (paso + texto): al retomar tras un reinicio, lo ya respondido se reutiliza. Sin respuesta en `QUESTION_TIMEOUT_MIN`
+  el agente sigue con lo más prudente. Máximo `MAX_QUESTIONS_PER_STEP` por paso. El planificador también puede preguntar.
+* **Guías.** `taskKind()` clasifica la misión (`ci-fix` si cita un run de CI o pide arreglar un pipeline en rojo;
+  `data-lookup` para consultas sin repo). `guideFor()` agrega `config/guides/<tipo>.md` al plan y a cada tarea; la
+  corrección automática de GitHub Actions usa siempre la guía `ci-fix`.
+* **Aprendizaje medido.** Cada misión recuerda qué lecciones recibió (`missions.lesson_ids`). Al terminar,
+  `recordOutcome()` suma un uso y si salió bien o falló (una vez por misión). Si una falla de herramienta o una corrección
+  del usuario vuelve a producir una lección que ya estaba en el prompt, cuenta como *repetición*. Un ajuste por chat es
+  una corrección: el agente propone una `LECCIÓN` (fuente `correccion`) y `recordCorrection()` lo anota en las lecciones
+  usadas. `lessonHealth()` (≥3 usos): *sirve*, *a medias* o *no sirve*; las que no sirven dejan de enviarse.
+* **Seguridad antes de publicar** (`deliverRepo`, corrección de CI, ajustes por chat):
+  1. `scanSecrets()` sobre `git diff origin/<base>` (solo líneas agregadas + archivos de credenciales). Con hallazgos no
+     hay commit: se pregunta *que el agente lo quite* (se reescanea) / *falso positivo: publicar* / *no publicar*.
+  2. `approvePublish()`: entrega directa en la rama base y/o `migrationFiles()` → aprobación (*publicar* / *rama nueva* /
+     *no publicar*). Sin respuesta a tiempo o una respuesta ambigua: no se publica (commit local).
+* **Mantenimiento.** `cleanupOld()` al arrancar, cada 24 h y desde *Ajustes → Uso y limpieza* (con vista previa):
+  borra `worktrees/<misión>` (con `git worktree remove` + `prune`) y `runs/<misión>` de misiones terminadas hace más de
+  `RETENTION_DAYS` días; conserva lo que tiene cambios sin commit o commits sin publicar. `usageMetrics()` →
+  `GET /api/metrics/usage?days=N`: pasos, minutos, fallas, límites alcanzados (`engineSwitch`) y misiones por motor.

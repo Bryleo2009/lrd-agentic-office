@@ -149,6 +149,14 @@ export class GitWorktreeManager {
     return { stat, files: names.split(/\r?\n/).filter(Boolean), patch };
   }
 
+  /** Todo lo que se publicaría respecto a origin/<base>: commits de la misión + cambios sin commit. */
+  async diffFromBase(wt: string, base: string): Promise<{ files: string[]; patch: string }> {
+    await git(["add", "-A", "--intent-to-add", "."], wt).catch(() => undefined);
+    const names = await git(["diff", "--name-only", `origin/${base}`], wt).catch(() => "");
+    const patch = await git(["diff", `origin/${base}`], wt).catch(() => "");
+    return { files: names.split(/\r?\n/).filter(Boolean), patch };
+  }
+
   /** `targetBranch` solo para commits directos sobre una rama base no protegida (HEAD separado). */
   async commit(wt: string, message: string, targetBranch?: string): Promise<string | null> {
     const branch = targetBranch ?? (await this.currentBranch(wt));

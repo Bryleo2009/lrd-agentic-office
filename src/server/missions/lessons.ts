@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Lesson } from "../../shared/types";
+import { lessonHealth, type Lesson } from "../../shared/types";
 import { config } from "../config";
 
 /**
@@ -54,8 +54,12 @@ export function listLessons(): Lesson[] {
   return load().sort((a, b) => b.hits - a.hits || b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/** Guarda (o refuerza, si ya existe una muy parecida) una lección. */
-export function addLesson(text: string, scope: string, source: Lesson["source"]): Lesson | null {
+/**
+ * Guarda (o refuerza, si ya existe una muy parecida) una lección. `usedIds`: lecciones que el equipo ya
+ * tenía en esta misión; si una falla de herramienta o una corrección tuya vuelve a producir una de ellas,
+ * el problema se repitió a pesar de la lección.
+ */
+export function addLesson(text: string, scope: string, source: Lesson["source"], usedIds: string[] = []): Lesson | null {
   const clean = sanitizeLesson(text);
   if (clean.length < 12) return null;
   const all = load();
@@ -64,6 +68,9 @@ export function addLesson(text: string, scope: string, source: Lesson["source"])
   const same = all.find((l) => l.scope === scope && (key(l.text) === k || key(l.text).includes(k) || k.includes(key(l.text))));
   if (same) {
     same.hits++;
+    // Repetición real: la herramienta volvió a fallar, o tuviste que corregir lo mismo otra vez. (Que un agente
+    // vuelva a escribir una lección que ya recibió no significa que el problema se repitió.)
+    if (usedIds.includes(same.id) && source !== "equipo") same.repeats = (same.repeats ?? 0) + 1;
     same.updatedAt = now;
     if (clean.length > same.text.length && source !== "auto") same.text = clean;
     save(all);
@@ -84,14 +91,59 @@ export function deleteLesson(id: string): boolean {
   return next.length !== all.length;
 }
 
-/** Lecciones útiles para una misión (según sus repos y si usa datos), como texto para el prompt. */
-export function lessonsFor(scopes: string[], limit = 12): string {
+/**
+ * Lecciones para una misión (según sus repos y si usa datos). Las que se demostró que no sirven
+ * (el problema se repite igual, o las misiones que las usan fallan) dejan de enviarse.
+ */
+export function pickLessons(scopes: string[], limit = 12): Lesson[] {
   const want = new Set([...scopes, "general"]);
-  const picked = listLessons()
-    .filter((l) => want.has(l.scope))
+  return listLessons()
+    .filter((l) => want.has(l.scope) && lessonHealth(l) !== "no_sirve")
     .slice(0, limit);
+}
+
+export function lessonsPrompt(picked: Lesson[]): string {
   if (!picked.length) return "";
   return `\nLecciones de misiones anteriores de este equipo (aplícalas para ir directo y no repetir errores):\n${picked.map((l) => `- ${l.text}`).join("\n")}\n`;
+}
+
+/** Lecciones útiles para una misión, como texto para el prompt. */
+export function lessonsFor(scopes: string[], limit = 12): string {
+  return lessonsPrompt(pickLessons(scopes, limit));
+}
+
+/**
+ * Resultado de una misión que usó estas lecciones: cuenta un uso y si terminó bien o falló.
+ * Cada misión se cuenta una sola vez por lección (aunque se retome tras un reinicio).
+ */
+export function recordOutcome(ids: string[], missionId: string, ok: boolean): void {
+  if (!ids.length) return;
+  const all = load();
+  let changed = false;
+  for (const l of all) {
+    if (!ids.includes(l.id) || l.scored?.includes(missionId)) continue;
+    l.uses = (l.uses ?? 0) + 1;
+    if (ok) l.ok = (l.ok ?? 0) + 1;
+    else l.failed = (l.failed ?? 0) + 1;
+    l.scored = [...(l.scored ?? []), missionId].slice(-40);
+    changed = true;
+  }
+  if (changed) save(all);
+}
+
+/** El usuario tuvo que corregir por chat una misión que usó estas lecciones (una vez por misión). */
+export function recordCorrection(ids: string[], missionId: string): void {
+  if (!ids.length) return;
+  const all = load();
+  let changed = false;
+  const tag = `c:${missionId}`;
+  for (const l of all) {
+    if (!ids.includes(l.id) || l.scored?.includes(tag)) continue;
+    l.corrected = (l.corrected ?? 0) + 1;
+    l.scored = [...(l.scored ?? []), tag].slice(-40);
+    changed = true;
+  }
+  if (changed) save(all);
 }
 
 /** Extrae líneas "LECCIÓN: …" de una respuesta y devuelve el texto sin ellas. */

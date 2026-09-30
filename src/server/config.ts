@@ -70,6 +70,22 @@ export const config = {
   /** Pausa (ms) tras handoffs/reuniones para que la oficina alcance a representarlos. 0 = sin pausa. */
   visualPacingMs: Math.max(0, Number(env.VISUAL_PACING_MS ?? 4000)),
   stepTimeoutMs: Math.max(1, Number(env.AGENT_STEP_TIMEOUT_MIN ?? 30)) * 60_000,
+  /** Minutos que se espera la respuesta a una pregunta de un agente (0 = sin límite). Luego sigue con lo más prudente. */
+  questionTimeoutMs: Math.max(0, Number(env.QUESTION_TIMEOUT_MIN ?? 120)) * 60_000,
+  /** Preguntas al usuario por paso como máximo (0 = los agentes nunca preguntan). */
+  maxQuestionsPerStep: Math.max(0, Number(env.MAX_QUESTIONS_PER_STEP ?? 2)),
+  /** Minutos que se espera una aprobación antes de publicar (0 = sin límite). Sin respuesta, no se publica. */
+  approvalTimeoutMs: Math.max(0, Number(env.APPROVAL_TIMEOUT_MIN ?? 120)) * 60_000,
+  /** Qué necesita aprobación antes de publicar: entregas directas en la rama base y migraciones. */
+  approvals: {
+    direct: (env.REQUIRE_APPROVAL ?? "direct,migrations").split(",").map((x) => x.trim()).includes("direct"),
+    migrations: (env.REQUIRE_APPROVAL ?? "direct,migrations").split(",").map((x) => x.trim()).includes("migrations"),
+  },
+  /** Revisar el diff en busca de secretos antes de cada commit/publicación. */
+  secretScan: bool(env.SECRET_SCAN, true),
+  /** Días que se conservan worktrees y logs de misiones terminadas (0 = no limpiar). */
+  retentionDays: Math.max(0, Number(env.RETENTION_DAYS ?? 14)),
+  guidesDir: path.resolve(PROJECT_ROOT, env.LRD_GUIDES_DIR || "config/guides"),
   reposFile: path.resolve(PROJECT_ROOT, env.LRD_REPOS_FILE || "config/repositories.json"),
 };
 
@@ -105,5 +121,7 @@ export function publicConfig(): PublicConfig {
     protectedBranches: loadRepositories().protectedBranches,
     workspaceRoot: config.workspaceRoot,
     agentEngines: config.agentEngines,
+    approvals: config.approvals,
+    retentionDays: config.retentionDays,
   };
 }

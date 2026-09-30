@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { Mission, MissionQuestion } from "../../shared/types";
 import { agentOf as getAgent } from "../app/team";
 import { api } from "../app/api";
 import { branchesOf, isLive, MISSION_STATUS, repoLabel, STEP_STATUS } from "../app/format";
@@ -17,6 +18,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
   const age = Date.now() - new Date(current.updatedAt).getTime();
   if (!live && age > 10 * 60_000) return null;
   const steps = current.steps.filter((s) => s.kind !== "plan" || s.status !== "done");
+  const open = (current.questions ?? []).filter((q) => q.status === "open");
 
   return (
     <div className={`mission-hud glass ${current.status}`}>
@@ -26,6 +28,10 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
         <span className="hud-engine">{current.provider === "codex" ? "Codex" : "Claude Code"}</span>
         <span className="chev">{collapsed ? "▸" : "▾"}</span>
       </button>
+      {/* Una pregunta abierta siempre se ve, aunque la tarjeta esté plegada. */}
+      {open.map((q) => (
+        <QuestionCard key={q.id} mission={current} q={q} />
+      ))}
       {!collapsed && (
         <>
           <div className="hud-prompt">{current.prompt}</div>
@@ -62,6 +68,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
               </a>
             )}
             {current.planSource === "rules" && <span className="warn-text">plan por reglas</span>}
+            {current.taskKind && current.taskKind !== "general" && <span title="Guía de trabajo aplicada (config/guides)">guía: {current.taskKind === "ci-fix" ? "corrección de CI" : "consulta de datos"}</span>}
           </div>
           {current.error && <div className="hud-error">{current.error.split("\n")[0]}</div>}
           {live && (
@@ -124,6 +131,60 @@ function Checklist({ items, live }: { items: import("../../shared/types").Checkl
         </ul>
       )}
       {!live && done < items.length && failed === 0 && <div className="muted tiny">Algunos puntos no se marcaron explícitamente; revisa el informe de Atlas.</div>}
+    </div>
+  );
+}
+
+/** Pregunta de un agente o aprobación antes de publicar: la misión espera tu respuesta. */
+function QuestionCard({ mission, q }: { mission: Mission; q: MissionQuestion }) {
+  const toast = useStore((s) => s.showToast);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const a = getAgent(q.agentId);
+  const send = async (answer: string) => {
+    if (!answer.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.answer(mission.id, q.id, answer.trim());
+      setText("");
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={`hud-question ${q.kind}`} role="group" aria-label={q.kind === "approval" ? "Aprobación pendiente" : "Pregunta pendiente"}>
+      <div className="hq-head">
+        <i style={{ background: a.color }} />
+        <b>{a.name}</b>
+        <span>{q.kind === "approval" ? "necesita tu aprobación" : "te pregunta"}</span>
+      </div>
+      <div className="hq-text">{q.text}</div>
+      {q.context && (
+        <details className="hq-context">
+          <summary>Detalle</summary>
+          <pre>{q.context}</pre>
+        </details>
+      )}
+      {q.options.length > 0 && (
+        <div className="hq-options">
+          {q.options.map((o, i) => (
+            <button key={o} className={`btn tiny ${i === 0 ? "primary" : "ghost"}`} disabled={busy} onClick={() => void send(o)}>
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+      {(q.kind === "question" || !q.options.length) && (
+        <div className="hq-reply">
+          <input value={text} placeholder="Escribe tu respuesta…" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void send(text)} disabled={busy} />
+          <button className="btn tiny primary" disabled={busy || !text.trim()} onClick={() => void send(text)}>
+            Responder
+          </button>
+        </div>
+      )}
+      {q.fallback && <div className="muted tiny">Si no respondes a tiempo: {q.fallback}</div>}
     </div>
   );
 }

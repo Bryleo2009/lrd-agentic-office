@@ -1,5 +1,5 @@
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, AgentProfile, EngineChoice, Lesson, Mission, RepositoryConfig, RuntimeStatus } from "../../shared/types";
+import type { AgentId, AgentProfile, CleanupReport, EngineChoice, Lesson, Mission, MissionQuestion, RepositoryConfig, RuntimeStatus, UsageMetrics } from "../../shared/types";
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -23,5 +23,9 @@ export const api = {
   lessons: () => req<Lesson[]>("/api/lessons"),
   addLesson: (text: string, scope: string) => req<Lesson>("/api/lessons", { method: "POST", body: JSON.stringify({ text, scope }) }),
   deleteLesson: (id: string) => req<{ ok: boolean }>(`/api/lessons/${id}`, { method: "DELETE", body: "{}" }),
+  answer: (missionId: string, questionId: string, answer: string) =>
+    req<MissionQuestion>(`/api/missions/${missionId}/questions/${questionId}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
+  usage: (days = 30) => req<UsageMetrics>(`/api/metrics/usage?days=${days}`),
+  cleanup: (dryRun: boolean) => req<CleanupReport>("/api/maintenance/cleanup", { method: "POST", body: JSON.stringify({ dryRun }) }),
   runtime: (force = false) => req<RuntimeStatus[]>(`/api/runtime${force ? "?force=1" : ""}`),
 };

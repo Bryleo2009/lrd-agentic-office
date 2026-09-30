@@ -54,6 +54,9 @@ if (!stepCols.includes("repository_id")) sqlite.exec("ALTER TABLE mission_steps 
 
 if (!cols.includes("ci")) sqlite.exec("ALTER TABLE missions ADD COLUMN ci TEXT NOT NULL DEFAULT '[]'");
 if (!cols.includes("checklist")) sqlite.exec("ALTER TABLE missions ADD COLUMN checklist TEXT NOT NULL DEFAULT '[]'");
+if (!cols.includes("questions")) sqlite.exec("ALTER TABLE missions ADD COLUMN questions TEXT NOT NULL DEFAULT '[]'");
+if (!cols.includes("task_kind")) sqlite.exec("ALTER TABLE missions ADD COLUMN task_kind TEXT NOT NULL DEFAULT 'general'");
+if (!cols.includes("lesson_ids")) sqlite.exec("ALTER TABLE missions ADD COLUMN lesson_ids TEXT NOT NULL DEFAULT '[]'");
 if (!cols.includes("resumes")) sqlite.exec("ALTER TABLE missions ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0");
 
 // Las misiones que quedaron a medias por un reinicio del servidor NO se dan por fallidas aquí:

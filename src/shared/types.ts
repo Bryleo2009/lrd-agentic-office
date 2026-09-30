@@ -87,6 +87,8 @@ export type MissionStatus =
   | "qa"
   | "committing"
   | "ci"
+  /** Pausada: espera la respuesta o la aprobación del usuario. */
+  | "waiting"
   | "done"
   | "failed"
   | "cancelled";
@@ -147,6 +149,30 @@ export interface CiInfo {
   attempts: number;
 }
 
+/** Pregunta o aprobación que pausa la misión hasta que el usuario responde. */
+export interface MissionQuestion {
+  id: string;
+  /** Clave estable (paso + pregunta): al retomar tras un reinicio no se repite lo ya respondido. */
+  key: string;
+  agentId: AgentId;
+  stepId: string | null;
+  /** question: la hace un agente · approval: la pide la oficina antes de publicar (secretos, migraciones, entrega directa). */
+  kind: "question" | "approval";
+  text: string;
+  /** Contexto breve (qué archivo, qué rama…). */
+  context: string | null;
+  options: string[];
+  status: "open" | "answered" | "expired";
+  answer: string | null;
+  /** Si nadie responde a tiempo, qué se hace (se muestra al usuario). */
+  fallback: string | null;
+  askedAt: string;
+  answeredAt: string | null;
+}
+
+/** Tipo de tarea: decide qué guía de trabajo reciben Atlas y los agentes. */
+export type TaskKind = "ci-fix" | "data-lookup" | "general";
+
 /** Separador para pedir varios repos en una misión: "lrd-back+lrd-front". */
 export const MULTI_REPO_SEP = "+";
 
@@ -183,6 +209,12 @@ export interface Mission {
   checklist: ChecklistItem[];
   /** Misión con varios repositorios: estado de cada uno (el primero es el principal). Vacío = un solo repo. */
   repos: MissionRepo[];
+  /** Preguntas y aprobaciones al usuario (abiertas y respondidas). */
+  questions: MissionQuestion[];
+  /** Tipo de tarea detectado (guía que se aplicó). */
+  taskKind: TaskKind;
+  /** Lecciones que recibió el equipo en esta misión (para medir si sirven). */
+  lessonIds: string[];
   createdAt: string;
   updatedAt: string;
   steps: MissionStep[];
@@ -234,6 +266,9 @@ export interface PublicConfig {
   protectedBranches: string[];
   workspaceRoot: string;
   agentEngines: Partial<Record<AgentId, Provider>>;
+  /** Qué necesita tu aprobación antes de publicar. */
+  approvals: { direct: boolean; migrations: boolean };
+  retentionDays: number;
 }
 
 export interface Snapshot {
@@ -261,8 +296,66 @@ export interface Lesson {
   id: string;
   text: string;
   scope: string;
-  source: "auto" | "equipo" | "usuario";
+  /** auto: herramienta que falló · equipo: la anotó un agente · usuario: la enseñaste tú · correccion: salió de un ajuste tuyo */
+  source: "auto" | "equipo" | "usuario" | "correccion";
   hits: number;
   createdAt: string;
   updatedAt: string;
+  /** Misiones terminadas en las que el equipo la tuvo en cuenta. */
+  uses?: number;
+  /** De esas, cuántas terminaron bien / fallaron. */
+  ok?: number;
+  failed?: number;
+  /** Veces que el mismo problema se repitió aunque la lección estaba en el prompt. */
+  repeats?: number;
+  /** Misiones en las que la usaron y luego tuviste que corregir por chat. */
+  corrected?: number;
+  /** Misiones ya contadas (evita contar dos veces al retomar). */
+  scored?: string[];
+}
+
+export type LessonHealth = "nueva" | "util" | "regular" | "no_sirve";
+
+/**
+ * ¿Sirve la lección? Con pocos usos no se juzga. Si el problema se repite a pesar de ella, o las misiones
+ * que la usan fallan o hay que corregirlas, "no_sirve" (deja de enviarse a los agentes).
+ */
+export function lessonHealth(l: Lesson): LessonHealth {
+  const uses = l.uses ?? 0;
+  if (uses < 3) return "nueva";
+  if ((l.repeats ?? 0) / uses >= 0.34 || ((l.failed ?? 0) + (l.corrected ?? 0)) / uses >= 0.6) return "no_sirve";
+  if ((l.ok ?? 0) / uses >= 0.7) return "util";
+  return "regular";
+}
+
+/** Uso por motor (Codex / Claude Code) en un periodo. */
+export interface EngineUsage {
+  provider: Provider;
+  steps: number;
+  done: number;
+  failed: number;
+  /** Minutos de trabajo real (suma de duración de pasos). */
+  minutes: number;
+  avgStepMin: number;
+  /** Veces que llegó a su límite y el paso siguió con el otro motor. */
+  saturations: number;
+  /** Misiones en las que fue el motor principal. */
+  missions: number;
+  byKind: Record<string, number>;
+}
+
+export interface UsageMetrics {
+  days: number;
+  since: string;
+  engines: EngineUsage[];
+  missions: { total: number; done: number; failed: number; cancelled: number; questions: number; approvals: number };
+}
+
+/** Resultado de la limpieza de carpetas viejas. */
+export interface CleanupReport {
+  dryRun: boolean;
+  days: number;
+  removed: { path: string; missionId: string | null; kind: "worktree" | "runs"; mb: number }[];
+  kept: { path: string; reason: string }[];
+  freedMb: number;
 }

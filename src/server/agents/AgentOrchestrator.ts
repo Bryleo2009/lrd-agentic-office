@@ -2,14 +2,17 @@ import { customAlphabet } from "nanoid";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import fs from "node:fs";
 import path from "node:path";
-import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionRepo, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
+import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionQuestion, type MissionRepo, type MissionStatus, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
 import { config, loadRepositories, paths } from "../config";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
 import { gitManager, GitError, isProtected, slugify } from "../integrations/git/GitWorktreeManager";
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
-import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
+import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor, lessonsPrompt, pickLessons, recordCorrection, recordOutcome } from "../missions/lessons";
+import { guideFor, TASK_KIND_LABEL, taskKind } from "../missions/guides";
+import { ASK_RULE, extractQuestion, pickOption, questionKey } from "../missions/questions";
+import { migrationFiles, scanSecrets } from "../missions/secrets";
 import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
@@ -24,6 +27,13 @@ import { sessions } from "./AgentSession";
 import { profile as getAgent, team } from "../settings";
 
 const missionIdGen = customAlphabet("0123456789ABCDEF", 5);
+const questionIdGen = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 8);
+/** Huella corta de un texto (claves estables de aprobaciones). */
+const hash = (t: string) => {
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Ejecuta `fn` sobre cada elemento con como máximo `limit` a la vez; conserva el orden de resultados. */
@@ -69,9 +79,14 @@ interface MissionRuntime {
   repos: Map<string, WorkRepo>;
   /** Pasos que se cortaron por un reinicio del servidor y se vuelven a ejecutar. */
   restarted: Set<string>;
+  /** Preguntas al usuario que están esperando respuesta (id → continuar). */
+  waiters: Map<string, (answer: string | null) => void>;
+  /** Estado de la misión antes de pausarse por una pregunta (se restaura al responder). */
+  statusBeforeWait: MissionStatus | null;
 }
 
-const newRuntime = (): MissionRuntime => ({ cancelled: false, qaSignals: new Set(), lastWriter: new Map(), repos: new Map(), restarted: new Set() });
+const newRuntime = (): MissionRuntime => ({ cancelled: false, qaSignals: new Set(), lastWriter: new Map(), repos: new Map(), restarted: new Set(), waiters: new Map(), statusBeforeWait: null });
+const TERMINAL: MissionStatus[] = ["done", "failed", "cancelled"];
 
 export class MissionError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -118,6 +133,10 @@ export class AgentOrchestrator {
     Object.assign(step, patch);
     repo.updateStep(step.id, patch);
     this.pushMission(missionId);
+  }
+
+  isActive(missionId: string): boolean {
+    return this.active.has(missionId);
   }
 
   isAgentBusy(agentId: AgentId): boolean {
@@ -173,6 +192,7 @@ export class AgentOrchestrator {
       rs.length > 1 ? rs.map((x) => ({ repositoryId: x.id, baseBranch: baseFor(x), worktree: null, branch: null, commitSha: null, pushed: false, prUrl: null })) : [];
     const id = missionIdGen();
     const area = inferArea(prompt, r);
+    const kind = taskKind(prompt, rs.length === 0);
     const now = new Date().toISOString();
     const mission: Mission = {
       id,
@@ -198,6 +218,9 @@ export class AgentOrchestrator {
       repos,
       ci: [],
       checklist: [],
+      questions: [],
+      taskKind: kind,
+      lessonIds: [],
       createdAt: now,
       updatedAt: now,
       steps: [],
@@ -216,6 +239,8 @@ export class AgentOrchestrator {
     if (baseFromText) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Rama base tomada de la misión: ${base}`, detail: "El texto de la misión indica desde qué rama partir.", status: "info" });
     const wantBranch = r ? requestedBranch(prompt) : null;
     if (wantBranch) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Si hay cambios, la rama será ${wantBranch}`, detail: "Nombre pedido en la misión.", status: "info" });
+    if (kind !== "general" && guideFor(kind))
+      this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Guía de trabajo: ${TASK_KIND_LABEL[kind]}`, detail: `El equipo sigue la guía config/guides/${kind}.md para este tipo de tarea.`, status: "info", metadata: { guide: kind } });
     if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcpServers.join(", ")} (sólo lectura)`, status: "warning" });
     this.pushMission(id);
     const rt = newRuntime();
@@ -261,6 +286,10 @@ export class AgentOrchestrator {
         status: "info",
         metadata: { resumed: true },
       });
+      // Las preguntas de agentes que quedaron sin responder se vuelven a hacer al repetir el paso;
+      // las aprobaciones pendientes se conservan (se vuelven a pedir con la misma clave).
+      if (m.questions.some((q) => q.status === "open" && q.kind === "question"))
+        this.setMission(id, { questions: m.questions.map((q) => (q.status === "open" && q.kind === "question" ? { ...q, status: "expired" as const } : q)) });
       const rt = newRuntime();
       this.active.set(id, rt);
       void this.run(id, rs, rt).finally(() => this.active.delete(id));
@@ -273,6 +302,7 @@ export class AgentOrchestrator {
     const rt = this.active.get(id);
     if (!rt) throw new MissionError("La misión no está en ejecución", 404);
     rt.cancelled = true;
+    for (const w of [...rt.waiters.values()]) w(null);
     for (const s of rt.qaSignals) {
       s.cancelled = true;
       s.kill?.();
@@ -381,7 +411,20 @@ export class AgentOrchestrator {
         status: cancelled ? "warning" : "error",
         metadata: { missionFailed: !cancelled },
       });
+    } finally {
+      this.closeMission(id);
     }
+  }
+
+  /**
+   * Al terminar una misión: cierra las preguntas que quedaron abiertas y registra si las lecciones que
+   * usó el equipo sirvieron (terminó bien) o no (falló). Así se mide qué lecciones ayudan de verdad.
+   */
+  private closeMission(id: string): void {
+    const m = repo.getMission(id);
+    if (!m || !TERMINAL.includes(m.status)) return;
+    if (m.questions.some((q) => q.status === "open")) this.setMission(id, { questions: m.questions.map((q) => (q.status === "open" ? { ...q, status: "expired" as const } : q)) });
+    if (m.status !== "cancelled") recordOutcome(m.lessonIds, id, m.status === "done");
   }
 
   /** Guarda el estado de GitHub Actions de un repo en la misión (para la oficina y el informe). */
@@ -467,7 +510,7 @@ export class AgentOrchestrator {
 GitHub Actions falló en ${w.cfg.github}, rama ${res.branch} (commit ${sha.slice(0, 7)}), después de los cambios de esta misión: "${mission.prompt.slice(0, 400)}".
 Corrige SOLO lo que causan los cambios de esta misión, con el cambio mínimo y sin tocar nada fuera de su alcance.${w.cfg.checkCommand ? ` Verifica con \`${w.cfg.checkCommand}\` (o la parte que falló).` : ""}
 Si la falla no tiene relación con estos cambios (p. ej. un problema de infraestructura o algo que ya fallaba antes), NO modifiques archivos y empieza tu respuesta con "NO_RELACIONADO:" y el motivo.
-
+${guideFor("ci-fix")}
 Log de los jobs que fallaron:
 ${messageBus
   .take(id, writer)
@@ -483,6 +526,7 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       const text = this.absorb(id, writer, fix.text, w.cfg.id);
       if (/NO_RELACIONADO/i.test(text)) return finish("unrelated", `${r.detail}. ${getAgent(writer).name}: ${firstLine(text.replace(/.*NO_RELACIONADO:\s*/is, ""), 200)}`, "done", "warning");
       if (!(await gitManager.status(w.wt)).trim()) return finish("failure", `${r.detail}. ${getAgent(writer).name} no encontró qué cambiar.`, "failed", "error");
+      if ((await this.guardSecrets(id, w, rt, tag)) === "stop") return finish("failure", `${r.detail}. La corrección tiene un posible secreto y no se publicó.`, "failed", "error");
       const directCi = res.branch === w.base;
       const newSha = await gitManager.commit(w.wt, `fix(ci): ${firstLine(r.detail, 60)}\n\nMisión ${id} · corrección tras GitHub Actions (intento ${info.attempts})`, directCi ? w.base : undefined);
       if (!newSha) return finish("failure", `${r.detail}. No se pudo crear el commit de corrección.`, "failed", "error");
@@ -549,11 +593,23 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       return out;
     }
     const tag = multi ? ` (${w.cfg.name})` : "";
+    // Seguridad 1: nada con posibles secretos se guarda ni se publica sin tu decisión.
+    if ((await this.guardSecrets(id, w, rt, tag)) === "stop") {
+      this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Entrega detenida${tag}: posible secreto en los cambios`, detail: `Los cambios quedan sin commit en ${w.wt}. Quita el secreto y pídele al agente por chat "publica los cambios".`, status: "warning" });
+      return out;
+    }
     // Directo en la rama base: pedido en la misión, o la misión ya se pasó a su rama (mission.branch === base).
     const promoted = (multi ? mission.repos.find((x) => x.repositoryId === w.cfg.id)?.branch : mission.branch) === w.base;
-    const direct = (promoted || (!onBranch && prefs.directToBase)) && !isProtected(w.base);
+    let direct = (promoted || (!onBranch && prefs.directToBase)) && !isProtected(w.base);
     if (prefs.directToBase && !direct && !onBranch)
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${w.base} está protegida${tag}: se usa una rama nueva`, status: "warning" });
+    // Seguridad 2: entregas directas en la rama base y migraciones de BD se publican solo con tu aprobación.
+    let publish = config.githubPushEnabled && prefs.publish;
+    if (publish) {
+      const gate = await this.approvePublish(id, w, rt, tag, direct && !promoted && config.approvals.direct);
+      if (gate === "new-branch") direct = false;
+      if (gate === "no") publish = false;
+    }
     const branch = direct ? w.base : onBranch ? current : await this.branchName(mission, w);
     if (!direct && !onBranch) {
       await gitManager.createBranch(w.wt, branch);
@@ -571,8 +627,8 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
     const writer = rt.lastWriter.get(w.cfg.id) ?? (w.cfg.kind === "frontend" ? "mica" : "diego");
     this.emit(id, writer, { provider: "git", sessionId: null, type: "GIT_COMMIT", title: `Commit ${sha.slice(0, 7)}${tag}`, detail: msg, status: "success", metadata: { sha, branch, repositoryId: w.cfg.id } });
 
-    if (!(config.githubPushEnabled && prefs.publish)) {
-      const why = prefs.publish ? "GITHUB_PUSH_ENABLED=false" : "la misión pidió no publicar";
+    if (!publish) {
+      const why = !config.githubPushEnabled ? "GITHUB_PUSH_ENABLED=false" : !prefs.publish ? "la misión pidió no publicar" : "no se aprobó la publicación";
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Rama sin publicar${tag} (${why})`, detail: `Rama local: ${branch}`, status: "info" });
       return out;
     }
@@ -594,6 +650,258 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       this.emit(id, "atlas", { provider: "github", sessionId: null, type: "PR_CREATED", title: `${num ? `PR #${num} creado` : "PR creado"}${tag}`, detail: url, status: "success", metadata: { url, repositoryId: w.cfg.id } });
     }
     return out;
+  }
+
+  /**
+   * Revisión de secretos sobre todo lo que se publicaría (commits de la misión + cambios sin commit).
+   * Si encuentra algo, pausa y pregunta: que el agente lo quite, publicar (falso positivo) o no publicar.
+   * Sin respuesta a tiempo, no se publica.
+   */
+  private async guardSecrets(id: string, w: WorkRepo, rt: MissionRuntime, tag: string): Promise<"ok" | "stop"> {
+    if (!config.secretScan) return "ok";
+    for (let round = 0; ; round++) {
+      const d = await gitManager.diffFromBase(w.wt, w.base);
+      const found = scanSecrets(d.patch, d.files);
+      if (!found.length) {
+        if (round > 0) this.emit(id, "vega", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Revisión de secretos${tag}: ya no hay hallazgos`, status: "success" });
+        return "ok";
+      }
+      const list = found.map((f) => `• ${f.file}${f.line ? `:${f.line}` : ""} — ${f.kind}: ${f.preview}`).join("\n");
+      this.emit(id, "vega", { provider: "system", sessionId: null, type: "AGENT_BLOCKED", title: `Posible secreto en los cambios${tag}: no se publica sin tu decisión`, detail: list, status: "warning", metadata: { secrets: found.length } });
+      const writer = rt.lastWriter.get(w.cfg.id) ?? (w.cfg.kind === "frontend" ? "mica" : "diego");
+      const FIX = `Que ${getAgent(writer).name} lo quite`;
+      const OK = "Es un falso positivo: publicar";
+      const NO = "No publicar";
+      const options = round < 2 ? [FIX, OK, NO] : [OK, NO];
+      const { answer } = await this.ask(id, rt, {
+        key: `secret:${w.cfg.id}:${hash(found.map((f) => `${f.file}|${f.kind}|${f.preview}`).join("\n"))}`,
+        agentId: "vega",
+        kind: "approval",
+        text: `Encontré ${found.length} posible(s) secreto(s) en los cambios${tag}. ¿Qué hago?`,
+        context: list,
+        options,
+        fallback: "No se publica.",
+        timeoutMs: config.approvalTimeoutMs,
+      });
+      if (rt.cancelled) return "stop";
+      // Una respuesta ambigua ("sí") nunca publica un secreto: cuenta como "no publicar".
+      const choice = answer === null ? NO : options[pickOption(answer, options, options.length - 1)] ?? NO;
+      if (choice === OK) {
+        this.emit(id, "vega", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Aprobado por ti: se publica pese a la alerta de secretos${tag}`, status: "warning" });
+        return "ok";
+      }
+      if (choice !== FIX) return "stop";
+      messageBus.handoff(id, "vega", writer, "Quitar posibles secretos de los cambios", list);
+      await sleep(config.visualPacingMs);
+      const m = repo.getMission(id)!;
+      const fix = await this.runAgent(
+        id,
+        writer,
+        runtime.forAgent(writer, m.provider, m.engine),
+        w.wt,
+        "workspace-write",
+        `${getAgent(writer).systemBrief}
+La revisión de secretos encontró posibles credenciales en los cambios de ${w.cfg.name}:
+${messageBus
+  .take(id, writer)
+  .map((h) => h.payload)
+  .join("\n")}
+
+Quítalas del código: lee el valor desde configuración/variables de entorno (y si hace falta documenta la variable en .env.example con un valor de ejemplo, nunca el real) y saca del cambio los archivos de credenciales. Nunca escribas el valor en tu respuesta.
+No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
+        "Quitar secretos",
+        rt,
+      );
+      if (!fix.ok) return "stop";
+      this.absorb(id, writer, fix.text, w.cfg.id);
+    }
+  }
+
+  /**
+   * Aprobación antes de publicar: entrega directa en la rama base (sin rama nueva ni PR) y/o cambios con
+   * migraciones de base de datos. Devuelve "yes", "new-branch" (mejor en una rama nueva) o "no" (dejar local).
+   */
+  private async approvePublish(id: string, w: WorkRepo, rt: MissionRuntime, tag: string, direct: boolean): Promise<"yes" | "new-branch" | "no"> {
+    const migrations = config.approvals.migrations ? migrationFiles((await gitManager.diffFromBase(w.wt, w.base)).files) : [];
+    if (!direct && !migrations.length) return "yes";
+    const reasons = [
+      direct ? `Se publicaría DIRECTO en \`${w.base}\` (sin rama nueva ni PR).` : null,
+      migrations.length ? `Incluye ${migrations.length} migración(es) de base de datos:\n${migrations.map((f) => `• ${f}`).join("\n")}` : null,
+    ].filter(Boolean) as string[];
+    const YES = direct ? `Aprobar: publicar en ${w.base}` : "Aprobar publicación";
+    const BRANCH = "Mejor en una rama nueva agentic/…";
+    const NO = "No publicar (dejar local)";
+    const options = direct ? [YES, BRANCH, NO] : [YES, NO];
+    this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Necesito tu aprobación para publicar${tag}`, detail: reasons.join("\n\n"), status: "warning" });
+    const { answer } = await this.ask(id, rt, {
+      key: `approve:${w.cfg.id}:${direct ? `direct-${w.base}` : ""}:${hash(migrations.join(","))}`,
+      agentId: "atlas",
+      kind: "approval",
+      text: `¿Apruebas publicar los cambios${tag}?`,
+      context: reasons.join("\n\n"),
+      options,
+      fallback: "No se publica: queda local.",
+      timeoutMs: config.approvalTimeoutMs,
+    });
+    const choice = answer === null ? NO : options[pickOption(answer, options, 0, options.length - 1)] ?? NO;
+    const result = choice === YES ? "yes" : choice === BRANCH ? "new-branch" : "no";
+    this.emit(id, "atlas", {
+      provider: "system",
+      sessionId: null,
+      type: "AGENT_STATUS",
+      title: result === "yes" ? `Publicación aprobada${tag}` : result === "new-branch" ? `Se publica en una rama nueva${tag}, no en ${w.base}` : `No se publica${tag}: ${answer === null ? "sin respuesta a tiempo" : "no aprobado"}`,
+      status: result === "yes" ? "success" : "info",
+    });
+    return result;
+  }
+
+  /**
+   * Pausa la misión con una pregunta al usuario y espera su respuesta. Si la misma pregunta (misma clave)
+   * ya se respondió —por ejemplo antes de un reinicio—, devuelve esa respuesta sin volver a preguntar.
+   * `answer` es null si se canceló o no respondió a tiempo (`timedOut`).
+   */
+  private async ask(
+    id: string,
+    rt: MissionRuntime,
+    q: { key: string; agentId: AgentId; step?: MissionStep; kind: MissionQuestion["kind"]; text: string; context?: string | null; options?: string[]; fallback: string; timeoutMs: number },
+  ): Promise<{ answer: string | null; timedOut: boolean }> {
+    const m = repo.getMission(id)!;
+    const prior = m.questions.find((x) => x.key === q.key && x.status !== "expired");
+    if (prior?.status === "answered") return { answer: prior.answer, timedOut: false };
+    const question: MissionQuestion = prior ?? {
+      id: questionIdGen(),
+      key: q.key,
+      agentId: q.agentId,
+      stepId: q.step?.id ?? null,
+      kind: q.kind,
+      text: q.text,
+      context: q.context ? q.context.slice(0, 3000) : null,
+      options: q.options ?? [],
+      status: "open",
+      answer: null,
+      fallback: q.fallback,
+      askedAt: new Date().toISOString(),
+      answeredAt: null,
+    };
+    if (m.status !== "waiting") rt.statusBeforeWait = m.status;
+    this.setMission(id, { status: "waiting", ...(prior ? {} : { questions: [...m.questions, question] }) });
+    if (q.step) this.setStep(id, q.step, { status: "waiting" });
+    const name = getAgent(q.agentId).name;
+    this.emit(id, q.agentId, {
+      provider: "system",
+      sessionId: null,
+      type: "AGENT_WAITING",
+      title: q.kind === "approval" ? `${name} espera tu aprobación: ${firstLine(q.text, 90)}` : `${name} te pregunta: ${firstLine(q.text, 100)}`,
+      detail: `${q.text}${question.context ? `\n\n${question.context}` : ""}${question.options.length ? `\n\nOpciones: ${question.options.join(" · ")}` : ""}`,
+      status: "warning",
+      metadata: { question: question.id, kind: q.kind },
+    });
+    const answer = await new Promise<string | null>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = (v: string | null) => {
+        if (timer) clearTimeout(timer);
+        rt.waiters.delete(question.id);
+        resolve(v);
+      };
+      rt.waiters.set(question.id, done);
+      if (q.timeoutMs > 0) timer = setTimeout(() => done(null), q.timeoutMs);
+      if (rt.cancelled) done(null);
+    });
+    const timedOut = answer === null && !rt.cancelled;
+    if (timedOut) {
+      this.updateQuestion(id, question.id, { status: "expired" });
+      this.emit(id, q.agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Sin respuesta a tiempo: ${q.fallback}`, detail: q.text, status: "info" });
+    }
+    if (!rt.cancelled && rt.waiters.size === 0) {
+      this.setMission(id, { status: rt.statusBeforeWait ?? "running" });
+      rt.statusBeforeWait = null;
+    }
+    if (q.step && !rt.cancelled) this.setStep(id, q.step, { status: "running" });
+    return { answer, timedOut };
+  }
+
+  private updateQuestion(missionId: string, qid: string, patch: Partial<MissionQuestion>): MissionQuestion | null {
+    const m = repo.getMission(missionId);
+    const q = m?.questions.find((x) => x.id === qid);
+    if (!m || !q) return null;
+    const next = { ...q, ...patch };
+    this.setMission(missionId, { questions: m.questions.map((x) => (x.id === qid ? next : x)) });
+    return next;
+  }
+
+  /** Respuesta del usuario a una pregunta o aprobación (desde la oficina o por el chat del agente). */
+  answerQuestion(missionId: string, qid: string, answer: string): MissionQuestion {
+    const text = answer.trim();
+    if (!text) throw new MissionError("La respuesta está vacía");
+    const m = repo.getMission(missionId);
+    const q = m?.questions.find((x) => x.id === qid);
+    if (!m || !q) throw new MissionError("Pregunta no encontrada", 404);
+    if (q.status !== "open") throw new MissionError(q.status === "answered" ? "Esa pregunta ya fue respondida" : "Esa pregunta ya no está vigente", 409);
+    const next = this.updateQuestion(missionId, qid, { status: "answered", answer: text.slice(0, 4000), answeredAt: new Date().toISOString() })!;
+    eventBus.publish({ missionId, agentId: q.agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(q.agentId).name}: ${firstLine(text, 80)}`, detail: text, status: "info", metadata: { chat: true, fromUser: true, answer: qid } });
+    // Si el servidor se reinició mientras tanto, la respuesta queda guardada y se usa al retomar.
+    this.active.get(missionId)?.waiters.get(qid)?.(next.answer);
+    return next;
+  }
+
+  /** Pregunta abierta de un agente en una misión en curso (para responderla por su chat). */
+  private openQuestionFor(agentId: AgentId, missionId?: string | null): { missionId: string; q: MissionQuestion } | null {
+    for (const mid of this.active.keys()) {
+      if (missionId && mid !== missionId) continue;
+      const q = repo
+        .getMission(mid)
+        ?.questions.filter((x) => x.status === "open" && x.agentId === agentId)
+        .at(-1);
+      if (q && this.active.get(mid)?.waiters.has(q.id)) return { missionId: mid, q };
+    }
+    return null;
+  }
+
+  /**
+   * Ejecuta un agente y, si responde con "PREGUNTA: …", pausa el paso hasta que el usuario responda y
+   * le pasa la respuesta para que continúe (como máximo MAX_QUESTIONS_PER_STEP veces por paso).
+   */
+  private async runAgentAsking(
+    id: string,
+    agentId: AgentId,
+    provider: Provider,
+    cwd: string,
+    permission: PermissionProfile,
+    prompt: string,
+    title: string,
+    rt: MissionRuntime,
+    step?: MissionStep,
+  ): ReturnType<AgentOrchestrator["runAgent"]> {
+    let res = await this.runAgent(id, agentId, provider, cwd, permission, prompt, title, rt, step);
+    for (let n = 0; res.ok && n < config.maxQuestionsPerStep; n++) {
+      const q = extractQuestion(res.text);
+      if (!q) break;
+      const { answer, timedOut } = await this.ask(id, rt, {
+        key: questionKey(step?.id ?? title, q.text),
+        agentId,
+        step,
+        kind: "question",
+        text: q.text,
+        context: q.rest ? q.rest.slice(0, 1500) : null,
+        options: q.options,
+        fallback: `${getAgent(agentId).name} sigue con lo más prudente y lo explica en su resumen.`,
+        timeoutMs: config.questionTimeoutMs,
+      });
+      if (rt.cancelled) return { ok: false, error: "Cancelada", provider: res.provider };
+      const reply = timedOut || answer === null ? "(no respondió a tiempo: decide lo más prudente, sigue y explica el supuesto en tu resumen)" : `"${answer}"`;
+      res = await this.runAgent(
+        id,
+        agentId,
+        res.provider,
+        cwd,
+        permission,
+        `${prompt}\n\n---\nYa le preguntaste al usuario: "${q.text}". Su respuesta: ${reply}\nNo vuelvas a preguntar lo mismo: continúa con tu tarea usando esa respuesta y termina como se pidió. Si la respuesta es una preferencia general que el equipo debe recordar en próximas misiones, agrega una línea "LECCIÓN: …".`,
+        title,
+        rt,
+        step,
+      );
+    }
+    return res;
   }
 
   /** Misión sin repositorio: análisis / datos (MCP). Sin git, sin QA, sin commit. */
@@ -621,11 +929,24 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
     return [...repos, ...(m.allowMcp || m.repositoryId === NO_REPO ? ["datos"] : [])];
   }
 
+  /** Lecciones para los prompts de la misión; recuerda cuáles recibió el equipo (para medir si sirven). */
+  private lessonsText(m: Mission): string {
+    const picked = pickLessons(this.lessonScopes(m));
+    const cur = repo.getMission(m.id)?.lessonIds ?? m.lessonIds ?? [];
+    const add = picked.map((l) => l.id).filter((x) => !cur.includes(x));
+    if (add.length) {
+      const lessonIds = [...cur, ...add];
+      m.lessonIds = lessonIds;
+      this.setMission(m.id, { lessonIds });
+    }
+    return lessonsPrompt(picked);
+  }
+
   /** Guarda lecciones y avisa en la oficina cuando el equipo aprende algo nuevo. */
-  private learn(missionId: string, agentId: AgentId, texts: string[], scope: string, source: "auto" | "equipo"): void {
+  private learn(missionId: string, agentId: AgentId, texts: string[], scope: string, source: "auto" | "equipo" | "correccion"): void {
     for (const t of texts.slice(0, 3)) {
-      const l = addLesson(t, scope, source);
-      if (l && l.hits === 1) this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Aprendido: ${firstLine(l.text, 110)}`, detail: l.text, status: "info", metadata: { lesson: l.id } });
+      const l = addLesson(t, scope, source, repo.getMission(missionId)?.lessonIds ?? []);
+      if (l && l.hits === 1) this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${source === "correccion" ? "Aprendido de tu corrección" : "Aprendido"}: ${firstLine(l.text, 110)}`, detail: l.text, status: "info", metadata: { lesson: l.id } });
     }
   }
 
@@ -653,7 +974,7 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
     const rest = existing.filter((s) => s.kind !== "plan");
     if (rest.length) {
       for (const s of rest) {
-        if (s.status === "running" || s.status === "cancelled") {
+        if (s.status === "running" || s.status === "cancelled" || s.status === "waiting") {
           rt.restarted.add(s.id);
           this.setStep(id, s, { status: "pending", error: null });
         }
@@ -770,7 +1091,9 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     const provider = runtime.forAgent("atlas", mission.provider, mission.engine);
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     this.emit(id, "atlas", { provider, sessionId: null, type: "AGENT_STATUS", title: "Planificando la misión", status: "running", metadata: { visual: "THINKING" } });
-    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi, lessonsFor(this.lessonScopes(mission))), "Planificar", rt, step);
+    const ask = config.maxQuestionsPerStep > 0 ? `\nSi la misión es ambigua en algo que cambia el plan y solo el usuario puede decidirlo, en lugar del JSON responde SOLO "PREGUNTA: …" (y si aplica "OPCIONES: a | b"). No preguntes lo que puedes decidir tú o averiguar leyendo.` : "";
+    const prompt = `${buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi, this.lessonsText(mission))}${guideFor(mission.taskKind)}${ask}`;
+    const res = await this.runAgentAsking(id, "atlas", provider, wt, "read-only", prompt, "Planificar", rt, step);
     if (!res.ok) {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
       throw new MissionError(`Atlas no pudo planificar: ${res.error}`);
@@ -807,7 +1130,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     const inbound = messageBus.take(id, step.agentId);
     const prompt = this.agentPrompt(mission, step, inbound, w, rt);
-    const res = await this.runAgent(id, step.agentId, provider, wt, step.writes ? "workspace-write" : "read-only", prompt, step.title, rt, step);
+    const res = await this.runAgentAsking(id, step.agentId, provider, wt, step.writes ? "workspace-write" : "read-only", prompt, step.title, rt, step);
     if (res.ok) {
       if (step.writes && w) rt.lastWriter.set(w.cfg.id, step.agentId);
       const text = this.absorb(id, step.agentId, res.text, w?.cfg.id ?? "datos");
@@ -865,7 +1188,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${lessonsFor(this.lessonScopes(m))}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
+${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${this.lessonsText(m)}${guideFor(m.taskKind)}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -876,8 +1199,8 @@ ${writes}${
         ? "\n\nNota: este paso se interrumpió porque el servidor de la oficina se reinició, y ahora se retoma. Puede haber cambios parciales tuyos en la carpeta: revisa `git status` y `git diff`, y continúa desde ahí sin duplicar trabajo."
         : ""
     }
-No hagas git commit/push ni cambies de rama: el orquestador controla Git.
-Si perdiste tiempo en algo evitable (una herramienta que no sirve aquí, un dato difícil de ubicar, un atajo), agrega hasta 2 líneas "LECCIÓN: …" concretas y reutilizables (sin datos personales ni valores de clientes).
+No hagas git commit/push ni cambies de rama: el orquestador controla Git.${config.maxQuestionsPerStep > 0 ? `\n${ASK_RULE}` : ""}
+Si perdiste tiempo en algo evitable (una herramienta que no sirve aquí, un dato difícil de ubicar, un atajo), agrega hasta 2 líneas "LECCIÓN: …" concretas y reutilizables (sin datos personales ni valores de clientes; no repitas las lecciones que ya recibiste).
 Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" seguida de una frase corta (máx. 12 palabras) de lo que encontraste o hiciste.`;
   }
 
@@ -1262,6 +1585,13 @@ Termina con "RESUMEN:" y una frase corta.`;
   // ------------------------------------------------------------------
   /** Chat real con la sesión del agente. */
   async chat(agentId: AgentId, message: string, missionId?: string | null, engine: EngineChoice = "auto"): Promise<void> {
+    // ¿El agente está esperando tu respuesta en una misión? Lo que escribas en su chat es la respuesta.
+    const waiting = this.openQuestionFor(agentId, missionId) ?? this.openQuestionFor(agentId);
+    if (waiting) {
+      this.answerQuestion(waiting.missionId, waiting.q.id, message);
+      eventBus.broadcast({ kind: "chat", agentId, missionId: waiting.missionId, delta: "", done: true });
+      return;
+    }
     if (this.isAgentBusy(agentId)) throw new MissionError(`${getAgent(agentId).name} está ejecutando un paso de misión. Espera a que termine.`, 409);
     const missions = repo.listMissions(20);
     const mission = (missionId ? repo.getMission(missionId) : null) ?? missions.find((m) => m.steps.some((s) => s.agentId === agentId)) ?? null;
@@ -1318,7 +1648,8 @@ Termina con "RESUMEN:" y una frase corta.`;
     if (change) entry.session.config.cwd = change.wt;
 
     const changeNote = change
-      ? `El usuario te pide un CAMBIO sobre la misión ${mission!.id}: puedes modificar archivos en tu carpeta (${change.cfg.name}, ${change.wt}). Haz el cambio mínimo y correcto${change.cfg.checkCommand ? ` y verifica con \`${change.cfg.checkCommand}\` o la parte relevante` : ""}. No hagas git commit/push ni cambies de rama: al terminar, la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions.`
+      ? `El usuario te pide un CAMBIO sobre la misión ${mission!.id}: puedes modificar archivos en tu carpeta (${change.cfg.name}, ${change.wt}). Haz el cambio mínimo y correcto${change.cfg.checkCommand ? ` y verifica con \`${change.cfg.checkCommand}\` o la parte relevante` : ""}. No hagas git commit/push ni cambies de rama: al terminar, la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions.
+Este ajuste es una corrección del usuario sobre el trabajo del equipo: si revela algo que el equipo debió hacer bien desde el inicio y es reutilizable (una convención, un archivo que siempre hay que tocar, una preferencia), agrega al final UNA línea "LECCIÓN: …" con la regla general (sin datos del caso).`
       : "No modifiques archivos: si el usuario pide un cambio de código, dile que lo pida con un verbo claro (p. ej. \"cambia…\", \"corrige…\") o que lance una misión.";
     const state = mission ? this.missionState(mission) : "";
     let prompt = change ? `${state}${changeNote}\n\nMensaje del usuario: ${message}` : `${state}${message}`;
@@ -1332,9 +1663,11 @@ Termina con "RESUMEN:" y una frase corta.`;
     const release = runtime.acquire(provider);
     void (async () => {
       let err: string | undefined;
+      let finalText = "";
       try {
         const iter = entry.session.hasTurn ? exec.sendMessage(entry.session, prompt) : exec.executeTask(entry.session, { prompt, title: "chat" });
         for await (const ev of iter) {
+          if (ev.type === "AGENT_FINISHED") finalText = ev.finalText ?? ev.detail ?? finalText;
           const pub = this.publishExecutorEvent(mid, agentId, provider, entry.session.cliSessionId, { ...ev, metadata: { ...(ev.metadata ?? {}), chat: true } });
           if (ev.type === "AGENT_MESSAGE") eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: ev.detail ?? ev.title, done: false });
           if (ev.type === "AGENT_ERROR") err = `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
@@ -1364,6 +1697,12 @@ Termina con "RESUMEN:" y una frase corta.`;
         }
       }
       eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
+      if (change && !err) {
+        // Aprender de la corrección: la lección que propone el agente, y cuenta en contra de las lecciones que se usaron.
+        const { lessons } = extractLessons(finalText);
+        if (lessons.length) this.learn(mission!.id, agentId, lessons.slice(0, 1), change.cfg.id, "correccion");
+        recordCorrection(mission!.lessonIds ?? [], mission!.id);
+      }
       if (change && !err)
         await this.deliverChatChange(mission!, agentId, change, message).catch((e) => {
           const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;

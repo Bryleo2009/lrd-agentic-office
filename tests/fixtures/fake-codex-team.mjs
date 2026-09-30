@@ -37,12 +37,22 @@ process.stdin.on("end", () => {
   if (input.includes("te pide un CAMBIO")) {
     fs.writeFileSync(path.join(process.cwd(), "chat-change.txt"), "ajuste pedido por chat\n");
     log({ kind: "chat-change" });
-    return say("Hecho: ajusté el texto del filtro.\nRESUMEN: cambio aplicado");
+    return say("Hecho: ajusté el texto del filtro.\nLECCIÓN: Los textos visibles de los filtros van en español y con mayúscula inicial.\nRESUMEN: cambio aplicado");
   }
   if (input.includes("GitHub Actions falló en")) {
     fs.writeFileSync(path.join(process.cwd(), "ci-fixed.txt"), "arreglado\n");
     log({ kind: "ci-fix" });
     return say("Corregí lo que rompía el lint.\nRESUMEN: CI corregido");
+  }
+  if (input.includes("La revisión de secretos encontró")) {
+    fs.writeFileSync(path.join(process.cwd(), "aws.js"), "export const AWS_KEY = process.env.AWS_KEY;\n");
+    log({ kind: "secret-fix" });
+    return say("Moví la clave a una variable de entorno.\nRESUMEN: secreto quitado");
+  }
+  // Pregunta al usuario (solo el paso del back, y solo hasta recibir la respuesta).
+  if (input.includes("PRUEBA_PREGUNTA") && input.includes("Tu tarea (Endpoint de totales)") && !input.includes("Su respuesta:")) {
+    log({ kind: "question" });
+    return say("Revisé el endpoint; hay dos formatos posibles.\nPREGUNTA: ¿Los totales van con IGV o sin IGV?\nOPCIONES: Con IGV | Sin IGV");
   }
   if (input.includes("Puedes modificar archivos")) {
     const who = input.includes("Tu tarea (Pantalla de totales)") ? "front" : "back";
@@ -50,6 +60,13 @@ process.stdin.on("end", () => {
     log({ kind: "agent", who });
     setTimeout(() => {
       fs.appendFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who} ${Date.now()}\n`);
+      const answer = input.match(/Su respuesta: "([^"]+)"/)?.[1];
+      if (answer) fs.writeFileSync(path.join(process.cwd(), "respuesta.txt"), answer + "\n");
+      if (input.includes("PRUEBA_SECRETO") && who === "back") fs.writeFileSync(path.join(process.cwd(), "aws.js"), 'export const AWS_KEY = "AKIAIOSFODNN7ABCDEFG";\n');
+      if (input.includes("PRUEBA_MIGRACION") && who === "back") {
+        fs.mkdirSync(path.join(process.cwd(), "database", "migrations"), { recursive: true });
+        fs.writeFileSync(path.join(process.cwd(), "database", "migrations", "2026_09_30_add_totales.php"), "<?php // migración\n");
+      }
       fs.appendFileSync(process.env.FAKE_TIMELINE, JSON.stringify({ who, start: t0, end: Date.now(), cwd: process.cwd() }) + "\n");
       say(`Listo en ${who}.\nHECHO: ${who === "back" ? 1 : 2}\nRESUMEN: cambio aplicado en ${who}`);
     }, Number(process.env.FAKE_AGENT_MS ?? 1500));

@@ -15,6 +15,8 @@ import { installShutdownHooks, reapOrphans } from "./runtime/childRegistry";
 import { addLesson, deleteLesson, listLessons } from "./missions/lessons";
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
+import { cleanupOld } from "./maintenance";
+import { usageMetrics } from "./metrics";
 import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
 
 void _sessions;
@@ -82,6 +84,22 @@ app.post("/api/missions", async (req) => {
 app.post("/api/missions/:id/cancel", async (req) => {
   await orchestrator.cancelMission((req.params as { id: string }).id);
   return { ok: true };
+});
+
+app.post("/api/missions/:id/questions/:qid/answer", async (req) => {
+  const { id, qid } = req.params as { id: string; qid: string };
+  const b = (req.body ?? {}) as { answer?: string };
+  return orchestrator.answerQuestion(id, qid, String(b.answer ?? ""));
+});
+
+// ---------------- uso por motor y mantenimiento ----------------
+app.get("/api/metrics/usage", async (req) => {
+  const days = Math.min(365, Math.max(1, Number((req.query as { days?: string }).days ?? 30) || 30));
+  return usageMetrics(days);
+});
+app.post("/api/maintenance/cleanup", async (req) => {
+  const b = (req.body ?? {}) as { dryRun?: boolean; days?: number };
+  return cleanupOld({ dryRun: b.dryRun !== false, days: b.days ? Math.max(1, Number(b.days)) : undefined, isActive: (id) => orchestrator.isActive(id) });
 });
 
 app.post("/api/agents/:id/chat", async (req) => {
@@ -173,6 +191,16 @@ const resumed = await orchestrator.resumeInterrupted().catch((e) => {
   return [] as string[];
 });
 if (resumed.length) console.log(`[lrd] Retomando ${resumed.length} misión(es) interrumpida(s): ${resumed.join(", ")}`);
+
+// Limpieza de carpetas viejas (worktrees y logs de misiones terminadas): al arrancar y una vez al día.
+const housekeeping = () =>
+  cleanupOld({ isActive: (id) => orchestrator.isActive(id) })
+    .then((r) => r.removed.length && console.log(`[lrd] Limpieza: ${r.removed.length} carpeta(s) de más de ${r.days} días (${r.freedMb} MB).`))
+    .catch((e) => console.error("[lrd] Limpieza fallida:", e));
+if (config.retentionDays > 0) {
+  void housekeeping();
+  setInterval(() => void housekeeping(), 24 * 3_600_000).unref();
+}
 
 const rt = runtime.snapshot();
 const line = (s: (typeof rt)[number]) => `${s.installed && s.authenticated !== false ? "✓" : "✗"} ${s.label.padEnd(12)} ${s.version ?? ""} ${s.message}`;

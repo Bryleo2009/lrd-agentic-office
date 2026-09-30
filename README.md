@@ -59,9 +59,20 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
      hayan quedado vivos se cierran antes de retomar.
    - **Consultas rápidas de datos** ("dame info del pedido que termina en 201631", "¿cuántas boletas hoy?"): sin repositorio,
      sin planificación y sin reunión final; las responde un solo agente directo con los datos.
-   - **El equipo aprende de sus errores**: si una herramienta falla o pierden tiempo en algo evitable, lo anotan como lección
-     (`<workspace>/lessons.json`) y Atlas y los agentes la leen antes de cada misión. Puedes verlas, borrarlas o enseñar las
-     tuyas en *Ajustes → Lo que aprendió*.
+   - **Te preguntan en vez de adivinar**: si a un agente (o a Atlas al planificar) le falta un dato que solo tú puedes decidir,
+     responde `PREGUNTA: …` (con `OPCIONES: a | b`) y **la misión se pausa** (*Esperando tu respuesta*). La pregunta aparece
+     en la tarjeta de la misión con botones; también puedes contestar escribiendo en el chat de ese agente. Con tu respuesta
+     el agente continúa en la misma sesión. Si nadie responde en `QUESTION_TIMEOUT_MIN`, sigue con lo más prudente y lo dice.
+     Tras un reinicio del servidor, lo ya respondido no se vuelve a preguntar.
+   - **Guías por tipo de tarea**: la oficina detecta si la misión es una **corrección de CI** o una **consulta de datos** y
+     Atlas y los agentes reciben la guía de `config/guides/ci-fix.md` o `config/guides/data-lookup.md` (log real primero,
+     reproducir, cambio mínimo, nunca desactivar pruebas… / ir directo a la consulta, `LIKE` para números parciales, máx.
+     3 consultas…). Edita esos archivos para ajustar cómo trabaja el equipo.
+   - **El equipo aprende de sus errores y de tus correcciones**: si una herramienta falla o pierden tiempo en algo evitable,
+     lo anotan como lección (`<workspace>/lessons.json`) y Atlas y los agentes la leen antes de cada misión. Cuando corriges
+     una misión por chat ("cambia…", "corrige…"), el agente anota la regla general que faltaba (*de tu corrección*).
+     **Se mide si cada lección sirve**: en cuántas misiones se usó, cuántas salieron bien, si el problema se repitió igual
+     y si luego tuviste que corregir. Las que no ayudan quedan *en pausa* (ya no se envían). Todo en *Ajustes → Lo que aprendió*.
    - **GitHub Actions**: tras publicar la rama, Vega espera el CI. Si falla y el mismo workflow está en verde en la rama
      base, le pasa el log al desarrollador, que corrige; se hace commit, se publica y se espera otra vez. Si falla también
      en la base, se informa que no lo causa la misión. Si la rama no dispara workflows o `gh` no tiene sesión, se dice
@@ -73,8 +84,12 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
      uno cada uno; la preferencia de cada agente se respeta). Si un motor llega a su límite, el paso sigue con el otro y
      la oficina lo recuerda como *saturado* hasta que vuelva (según su mensaje, o `ENGINE_COOLDOWN_MIN`), también tras
      reinicios; la barra superior lo muestra. Con cambios de código, **el otro motor revisa** lo implementado antes de QA.
-4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
-5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
+4. **Antes de publicar**, la oficina revisa el diff: si hay **posibles secretos** (claves AWS, tokens de GitHub/Slack/OpenAI,
+   claves privadas, contraseñas literales, `.env`, `*.pem`…) no hace commit ni push y te pregunta: que el agente lo quite,
+   publicar (falso positivo) o no publicar. Las **entregas directas en la rama base** y los cambios con **migraciones de BD**
+   se publican solo con tu **aprobación** (`REQUIRE_APPROVAL`); sin respuesta a tiempo, el commit queda local.
+5. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
+6. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
 ### Repositorio y rama opcionales
 
@@ -94,6 +109,13 @@ Si tienes un servidor MCP configurado en Codex (`codex mcp list`) o Claude Code 
 (sólo nombre y estado; nunca lee sus credenciales). Al crear una misión marca **Usar datos reales vía MCP (solo lectura)**.
 Sin esa marca los MCP se desactivan para la misión. Con ella, los agentes reciben reglas estrictas: sólo lecturas, con límites,
 sin exponer datos personales y citando la consulta usada. **Recomendación:** que el MCP de producción use un usuario de BD de solo lectura.
+
+### Uso por motor y limpieza (Ajustes → Uso y limpieza)
+
+Pasos, tiempo de trabajo, fallas, límites alcanzados y misiones de Codex y de Claude Code (7/30/90 días), más cuántas
+preguntas y aprobaciones hubo. La **limpieza** borra worktrees y logs crudos de misiones terminadas hace más de
+`RETENTION_DAYS` días (al arrancar, cada día, o con el botón tras ver la vista previa). Nunca toca misiones en curso,
+carpetas con cambios sin commit ni commits sin publicar; las ramas no se borran.
 
 ### Personalizar el equipo (Ajustes → Equipo, o *Personalizar* en el drawer)
 
@@ -129,6 +151,10 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `QA_FIX_ITERATIONS` | `1` | Ciclos de corrección si QA falla |
 | `AGENT_STEP_TIMEOUT_MIN` | `30` | Tiempo máximo por paso |
 | `VISUAL_PACING_MS` | `4000` | Pausa tras handoffs/reuniones para que la oficina los represente (0 = sin pausa) |
+| `QUESTION_TIMEOUT_MIN` / `MAX_QUESTIONS_PER_STEP` | `120` / `2` | Espera por tu respuesta a una pregunta de un agente (0 = sin límite) / preguntas por paso (0 = nunca preguntan) |
+| `SECRET_SCAN` | `true` | Revisar secretos en el diff antes de cada commit/publicación |
+| `REQUIRE_APPROVAL` / `APPROVAL_TIMEOUT_MIN` | `direct,migrations` / `120` | Qué necesita tu aprobación antes de publicar (vacío = nada) / espera; sin respuesta no se publica |
+| `RETENTION_DAYS` | `14` | Días que se conservan worktrees y logs de misiones terminadas (0 = no limpiar) |
 
 Repositorios en `config/repositories.json` (ya incluye `lrd-back`, `lrd-front` y, deshabilitados,
 `OfSystem`, `erp-ofsystem-back`, `erp-ofsystem-front`, `lrd-deploy-scripts`). Para habilitar uno: `"enabled": true`.
@@ -150,6 +176,8 @@ En Windows, `bash scripts/...` usa el bash de Git for Windows (`C:\Program Files
 - Los agentes de investigación corren en modo sólo lectura (Codex `--sandbox read-only`, Claude sin herramientas de edición).
 - Nunca se muestra razonamiento interno: sólo acciones observables (archivos, comandos, resultados).
 - Si algo falla (CLI, git, build, tests…), el agente queda **BLOCKED** con el error real. No se inventa éxito.
+- Revisión de secretos en cada entrega (también en las correcciones de CI y los ajustes por chat); los valores nunca se muestran completos.
+- Entregas directas en la rama base y migraciones de BD requieren tu aprobación. Pedir por chat "hazlo directo en esa rama" cuenta como aprobación.
 
 ## Scripts
 
@@ -158,7 +186,7 @@ En Windows, `bash scripts/...` usa el bash de Git for Windows (`C:\Program Files
 | `npm run dev` | Servidor + Vite (HMR) en `:4173` |
 | `npm run build` / `npm start` | Build de producción y servidor |
 | `npm run doctor` | Diagnóstico de herramientas, sesiones y acceso a repos |
-| `npm test` | Pruebas: parsers Codex/Claude, planner, DAG en paralelo, navegación A* |
+| `npm test` | Pruebas: parsers Codex/Claude, planner, DAG en paralelo, navegación A*, preguntas, secretos, lecciones, limpieza (el test de reinicio necesita `npm run build` antes) |
 | `npm run validate:visual` | Corre la oficina 65 s en Chromium y verifica movimiento, colisiones, encuentros, etc. (requiere `npm run dev` y un Chromium para `playwright-core`) |
 | `node scripts/e2e-mission.mjs <url> "<misión>" <repo> <base> <motor>` | Prueba de aceptación end-to-end con motor real y capturas |
 

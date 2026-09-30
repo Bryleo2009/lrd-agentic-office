@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentId, AgentProfile, Appearance, Gender, Lesson, Provider, RepositoryConfig } from "../../shared/types";
+import { lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
 
-type Tab = "team" | "repos" | "data" | "memory";
+type Tab = "team" | "repos" | "data" | "memory" | "usage";
 
 const HAIR: [Appearance["hairStyle"], string][] = [
   ["side_part", "Corto con raya"],
@@ -76,12 +76,16 @@ export function SettingsPanel({ engine }: { engine: OfficeEngine | null }) {
           <button className={tab === "memory" ? "on" : ""} onClick={() => setTab("memory")}>
             Lo que aprendió
           </button>
+          <button className={tab === "usage" ? "on" : ""} onClick={() => setTab("usage")}>
+            Uso y limpieza
+          </button>
         </div>
         <div className="settings-body">
           {tab === "team" && <TeamTab engine={engine} />}
           {tab === "repos" && <ReposTab />}
           {tab === "data" && <DataTab />}
           {tab === "memory" && <MemoryTab />}
+          {tab === "usage" && <UsageTab />}
         </div>
       </div>
     </div>
@@ -408,6 +412,28 @@ function DataTab() {
 
 // ---------------------------------------------------------------- Memoria del equipo
 
+const HEALTH: Record<ReturnType<typeof lessonHealth>, string> = {
+  nueva: "aún sin datos",
+  util: "sirve",
+  regular: "ayuda a medias",
+  no_sirve: "no está sirviendo · en pausa",
+};
+
+/** ¿Sirve la lección? Usos en misiones, cuántas salieron bien y si el problema se repitió igual. */
+function LessonStats({ l }: { l: Lesson }) {
+  const h = lessonHealth(l);
+  const uses = l.uses ?? 0;
+  const tip = uses
+    ? `Usada en ${uses} misión(es): ${l.ok ?? 0} bien, ${l.failed ?? 0} fallidas, ${l.corrected ?? 0} corregidas por ti después. El problema se repitió ${l.repeats ?? 0} vez/veces aunque el equipo la tenía.${h === "no_sirve" ? " Ya no se envía a los agentes; reescríbela u olvídala." : ""}`
+    : "Todavía no se usó en misiones terminadas.";
+  return (
+    <span className={`lesson-health ${h}`} title={tip}>
+      {uses ? `${uses} uso${uses === 1 ? "" : "s"} · ${Math.round(((l.ok ?? 0) / uses) * 100)}% bien${l.repeats ? ` · se repitió ${l.repeats}` : ""} · ` : ""}
+      {HEALTH[h]}
+    </span>
+  );
+}
+
 const SCOPE_LABEL: Record<string, string> = { datos: "Datos", general: "General" };
 
 function MemoryTab() {
@@ -440,9 +466,10 @@ function MemoryTab() {
               <span className="mini-pill ok">{SCOPE_LABEL[l.scope] ?? l.scope}</span>
               <span className="grow">{l.text}</span>
               <span className="muted" title="Veces que se volvió a aprender">
-                {l.source === "usuario" ? "tuya" : l.source === "auto" ? "automática" : "del equipo"}
+                {l.source === "usuario" ? "tuya" : l.source === "auto" ? "automática" : l.source === "correccion" ? "de tu corrección" : "del equipo"}
                 {l.hits > 1 ? ` · ×${l.hits}` : ""}
               </span>
+              <LessonStats l={l} />
               <button className="btn" onClick={() => void api.deleteLesson(l.id).then(load)} aria-label="Olvidar esta lección">
                 Olvidar
               </button>
@@ -466,6 +493,109 @@ function MemoryTab() {
             Enseñar
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Uso por motor y limpieza
+
+function UsageTab() {
+  const [days, setDays] = useState(30);
+  const [m, setM] = useState<UsageMetrics | null>(null);
+  const [preview, setPreview] = useState<CleanupReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const retention = useStore((s) => s.config?.retentionDays ?? 14);
+  const toast = useStore((s) => s.showToast);
+  useEffect(() => {
+    setM(null);
+    void api.usage(days).then(setM).catch(() => setM(null));
+  }, [days]);
+  const clean = async (dryRun: boolean) => {
+    setBusy(true);
+    try {
+      const r = await api.cleanup(dryRun);
+      setPreview(r);
+      if (!dryRun) toast(`Limpieza lista: ${r.removed.length} carpeta(s), ${r.freedMb} MB liberados`, "info");
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = (p: Provider) => (p === "codex" ? "Codex" : "Claude Code");
+  const KIND: Record<string, string> = { plan: "planes", agent: "pasos", xreview: "revisiones cruzadas", review: "revisiones", qa: "QA", ci: "CI" };
+  return (
+    <div className="repos">
+      <div className="repo-row">
+        <div className="repo-head">
+          <b className="grow">Uso por motor</b>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={7}>Últimos 7 días</option>
+            <option value={30}>Últimos 30 días</option>
+            <option value={90}>Últimos 90 días</option>
+          </select>
+        </div>
+      </div>
+      {!m ? (
+        <div className="empty">Cargando…</div>
+      ) : (
+        <>
+          <div className="usage-grid">
+            {m.engines.map((e) => (
+              <div key={e.provider} className="usage-card">
+                <h4>{label(e.provider)}</h4>
+                <dl>
+                  <dt>Pasos</dt>
+                  <dd>
+                    {e.steps} ({e.done} bien{e.failed ? `, ${e.failed} fallidos` : ""})
+                  </dd>
+                  <dt>Tiempo de trabajo</dt>
+                  <dd>{e.minutes} min</dd>
+                  <dt>Promedio por paso</dt>
+                  <dd>{e.avgStepMin} min</dd>
+                  <dt>Motor principal en</dt>
+                  <dd>{e.missions} misión(es)</dd>
+                  <dt>Llegó a su límite</dt>
+                  <dd>{e.saturations} vez/veces</dd>
+                </dl>
+                {Object.keys(e.byKind).length > 0 && (
+                  <div className="muted tiny">
+                    {Object.entries(e.byKind)
+                      .map(([k, n]) => `${n} ${KIND[k] ?? k}`)
+                      .join(" · ")}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="fineprint">
+            {m.missions.total} misión(es) en el periodo: {m.missions.done} completadas, {m.missions.failed} fallidas, {m.missions.cancelled} canceladas · {m.missions.questions} pregunta(s) de agentes y {m.missions.approvals}{" "}
+            aprobación(es) pedidas.
+          </p>
+        </>
+      )}
+
+      <div className="repo-row">
+        <div className="repo-head">
+          <b className="grow">Limpieza de carpetas viejas</b>
+          <button className="btn" disabled={busy} onClick={() => void clean(true)}>
+            Ver qué se borraría
+          </button>
+          <button className="btn primary" disabled={busy || !preview?.dryRun || !preview.removed.length} onClick={() => void clean(false)}>
+            Limpiar ahora
+          </button>
+        </div>
+        <p className="fineprint">
+          Borra worktrees y logs de misiones terminadas hace más de {retention} días (<code>RETENTION_DAYS</code>; se hace sola al arrancar y cada día). Nunca toca misiones en curso, carpetas con cambios sin
+          commit ni commits sin publicar. Las ramas no se borran.
+        </p>
+        {preview && (
+          <div className="muted tiny">
+            {preview.dryRun ? "Se borrarían" : "Se borraron"} {preview.removed.length} carpeta(s) · {preview.freedMb} MB
+            {preview.kept.length ? ` · se conservan ${preview.kept.length}: ${preview.kept.map((k) => `${k.path.split(/[\\/]/).slice(-2).join("/")} (${k.reason})`).join(", ")}` : ""}
+          </div>
+        )}
       </div>
     </div>
   );

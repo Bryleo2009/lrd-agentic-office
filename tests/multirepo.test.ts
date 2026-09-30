@@ -213,6 +213,9 @@ test("chat: pedir un cambio sobre una misión terminada lo aplica en su misma ra
   assert.notEqual(after.commitSha, before);
   assert.equal(after.branch, m.branch, "misma rama de la misión");
   assert.match(git(["show", "--stat", "--format=%s", `refs/heads/${m.branch}`], front), /ajuste por chat[\s\S]*chat-change\.txt/);
+  // Aprendió de la corrección del usuario.
+  const L = await import("../src/server/missions/lessons");
+  assert.ok(L.listLessons().some((l) => l.source === "correccion" && /textos visibles de los filtros/.test(l.text)), "lección aprendida de la corrección");
 });
 
 test("publicar por chat: integra commits remotos nuevos; si un hook bloquea, explica el motivo y 'publica los cambios' reintenta", { timeout: 150_000 }, async () => {
@@ -300,8 +303,15 @@ test("'en la misma rama': la corrección va directo a la rama del run; y 'hazlo 
   };
   process.env.FAKE_GH_RUN_BRANCH = "feature/venta-salon";
 
-  // 1) Pedido directo desde el inicio.
-  const a = await wait((await orchestrator.createMission({ prompt: "Corrige el CI Frontend Quality #502 en la misma rama", repositoryId: "lrd-front", engine: "codex" })).id);
+  // 1) Pedido directo desde el inicio: publicar directo en la rama requiere tu aprobación.
+  const a0 = await orchestrator.createMission({ prompt: "Corrige el CI Frontend Quality #502 en la misma rama", repositoryId: "lrd-front", engine: "codex" });
+  assert.equal(a0.taskKind, "ci-fix", "se aplica la guía de corrección de CI");
+  const approval = await openQuestion(a0.id);
+  assert.equal(approval.kind, "approval");
+  assert.match(approval.context ?? "", /DIRECTO en `feature\/venta-salon`/);
+  assert.equal(repo.getMission(a0.id)!.status, "waiting");
+  orchestrator.answerQuestion(a0.id, approval.id, "sí, dale");
+  const a = await wait(a0.id);
   assert.equal(a.status, "done", a.error ?? "");
   assert.equal(a.branch, "feature/venta-salon", "entrega directa en la rama del run");
   assert.equal(git(["rev-parse", "refs/heads/feature/venta-salon"], front), a.commitSha);
@@ -325,4 +335,79 @@ test("'en la misma rama': la corrección va directo a la rama del run; y 'hazlo 
   const after = repo.getMission(b.id)!;
   assert.equal(after.branch, "feature/venta-salon");
   assert.equal(git(["rev-parse", "refs/heads/feature/venta-salon"], front), git(["rev-parse", "HEAD"], after.worktree!));
+});
+
+/** Espera a que la misión tenga una pregunta abierta y la devuelve. */
+async function openQuestion(id: string) {
+  const repo = await import("../src/server/database/repo");
+  for (let i = 0; i < 400; i++) {
+    const q = repo.getMission(id)?.questions.find((x) => x.status === "open");
+    if (q) return q;
+    const st = repo.getMission(id)?.status;
+    if (st === "done" || st === "failed") throw new Error(`la misión terminó (${st}) sin preguntar`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error("nunca preguntó");
+}
+async function finished(id: string) {
+  const repo = await import("../src/server/database/repo");
+  let m = repo.getMission(id)!;
+  for (let i = 0; i < 400 && !["done", "failed", "cancelled"].includes(m.status); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    m = repo.getMission(id)!;
+  }
+  return m;
+}
+
+test("pregunta al usuario: el agente pausa su paso, respondes por su chat y continúa con tu respuesta", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const m0 = await orchestrator.createMission({ prompt: "Implementa los totales en la API PRUEBA_PREGUNTA", repositoryId: "lrd-back", engine: "codex" });
+  const q = await openQuestion(m0.id);
+  assert.equal(q.kind, "question");
+  assert.equal(q.agentId, "diego");
+  assert.match(q.text, /IGV/);
+  assert.deepEqual(q.options, ["Con IGV", "Sin IGV"]);
+  const paused = repo.getMission(m0.id)!;
+  assert.equal(paused.status, "waiting");
+  assert.equal(paused.steps.find((s) => s.id === q.stepId)?.status, "waiting");
+
+  // Lo que escribes en el chat del agente que espera es la respuesta.
+  await orchestrator.chat("diego", "Sin IGV", m0.id, "codex");
+  const m = await finished(m0.id);
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.equal(m.questions[0].status, "answered");
+  assert.equal(m.questions[0].answer, "Sin IGV");
+  assert.equal(git(["show", `refs/heads/${m.branch}:respuesta.txt`], back), "Sin IGV", "el agente continuó con la respuesta");
+});
+
+test("secretos: no se publica una clave; eliges que el agente la quite y recién ahí se publica", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const m0 = await orchestrator.createMission({ prompt: "Implementa los totales en la API PRUEBA_SECRETO", repositoryId: "lrd-back", engine: "codex" });
+  const q = await openQuestion(m0.id);
+  assert.equal(q.kind, "approval");
+  assert.match(q.context ?? "", /aws\.js:1 — AWS access key/);
+  assert.doesNotMatch(q.context ?? "", /AKIAIOSFODNN7ABCDEFG/, "nunca se muestra la clave completa");
+  assert.match(q.options[0], /^Que (Diego|Mica) lo quite$/);
+  orchestrator.answerQuestion(m0.id, q.id, q.options[0]);
+  const m = await finished(m0.id);
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.ok(m.pushed);
+  const published = git(["show", `refs/heads/${m.branch}:aws.js`], back);
+  assert.match(published, /process\.env\.AWS_KEY/);
+  assert.doesNotMatch(git(["log", "-p", `refs/heads/${m.branch}`], back), /AKIAIOSFODNN7ABCDEFG/, "la clave nunca llegó a un commit");
+});
+
+test("migraciones: sin tu aprobación el commit queda local y no se publica", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const m0 = await orchestrator.createMission({ prompt: "Implementa los totales en la API PRUEBA_MIGRACION", repositoryId: "lrd-back", engine: "codex" });
+  const q = await openQuestion(m0.id);
+  assert.equal(q.kind, "approval");
+  assert.match(q.context ?? "", /migración[\s\S]*database\/migrations\/2026_09_30_add_totales\.php/);
+  orchestrator.answerQuestion(m0.id, q.id, "no");
+  const m = await finished(m0.id);
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.ok(m.commitSha && m.branch?.startsWith("agentic/"), "commit local");
+  assert.equal(m.pushed, false);
+  assert.equal(git(["branch", "--list", m.branch!], back), "", "no llegó a GitHub");
 });
