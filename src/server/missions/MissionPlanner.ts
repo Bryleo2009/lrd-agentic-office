@@ -217,7 +217,7 @@ export function isAnalysisOnly(prompt: string): boolean {
 export function mcpEnv(name: string): "Producción" | "QA" | null {
   const n = name.toLowerCase();
   if (/(^|[-_.\s])(qa|staging|stage|stg|test|testing|dev|sandbox|pruebas?)([-_.\s]|$)/.test(n)) return "QA";
-  if (/prod|production|produccion|producción|live/.test(n)) return "Producción";
+  if (/prod|production|produccion|producción|live/.test(n) || /(^|[-_.\s])pr([-_.\s]|$)/.test(n)) return "Producción";
   return null;
 }
 

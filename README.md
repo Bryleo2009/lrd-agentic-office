@@ -117,6 +117,14 @@ preguntas y aprobaciones hubo. La **limpieza** borra worktrees y logs crudos de 
 `RETENTION_DAYS` días (al arrancar, cada día, o con el botón tras ver la vista previa). Nunca toca misiones en curso,
 carpetas con cambios sin commit ni commits sin publicar; las ramas no se borran.
 
+### MCP local de LRD para Producción y QA (`mcp/lrd-data`)
+
+Servidor MCP local sin dependencias que usa la API de consultas de `lrd-back` (`/api/v1/integrations/codex/*`) con
+OAuth `client_credentials`: guarda las credenciales de Producción y QA en tu PC, renueva los tokens solo y expone
+herramientas de solo lectura (`lrd_find_order` busca órdenes siempre con `LIKE`, primero en la fecha de hoy).
+Se registra como `lrd-pr` y `lrd-qa`, y la oficina los reconoce como Producción y QA. Instrucciones en
+[mcp/lrd-data/README.md](./mcp/lrd-data/README.md).
+
 ### Personalizar el equipo (Ajustes → Equipo, o *Personalizar* en el drawer)
 
 Nombre, sexo, rol, descripción, responsabilidades, color, motor preferido y apariencia (piel, peinado, color de cabello,
