@@ -178,7 +178,10 @@ function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) 
     return !!r && r.enabled && r.installed && r.authenticated !== false;
   };
   const autoName = (pref ?? config?.aiEngineDefault) === "claude" ? "Claude Code" : "Codex";
-  useEffect(() => endRef.current?.scrollIntoView({ block: "end" }), [chats.length, busy]);
+  useEffect(() => {
+    // Con llaves: en Chrome reciente scrollIntoView devuelve una Promise y React la trataría como "cleanup".
+    void endRef.current?.scrollIntoView({ block: "end" });
+  }, [chats.length, busy]);
 
   const send = async () => {
     const msg = text.trim();
