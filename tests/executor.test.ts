@@ -50,3 +50,13 @@ test("MCP de datos definido pero roto: no se relaja el bloqueo y el error se exp
   assert.match(err!.title, /servidor MCP «lrd» está mal definido/);
   assert.match(err!.detail ?? "", /\[mcp_servers\.lrd\]/);
 });
+
+test("MCP aportado por un plugin (lrd-connector): se desactiva el plugin, no mcp_servers.lrd", async () => {
+  const fs = await import("node:fs");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
+  fs.writeFileSync(path.join(home, "config.toml"), '[plugins."lrd-connector@personal"]\nenabled = true\n\n[plugins."browser@openai-bundled"]\nenabled = true\n\n[mcp_servers.node_repl]\ncommand = "x"\n');
+  const evs = await runCodex({ FAKE_LRD_PLUGIN: "1", CODEX_HOME: home });
+  const fin = evs.find((e) => e.type === "AGENT_FINISHED");
+  assert.ok(fin, JSON.stringify(evs.map((e) => [e.type, e.title])));
+  assert.match(fin!.finalText ?? "", /lrdOff=true/, "lrd debe seguir bloqueado (vía plugin)");
+});

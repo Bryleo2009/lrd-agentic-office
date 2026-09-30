@@ -13,14 +13,14 @@ if (a[0] === "exec") {
     process.stderr.write("Error loading config: invalid mcp_servers.node_repl: missing field `command`\n");
     process.exit(1);
   }
-  if (a.includes("mcp_servers.lrd.enabled=false") && (!lrdHere || process.env.FAKE_LRD_BROKEN)) {
+  if (a.includes("mcp_servers.lrd.enabled=false") && (!lrdHere || process.env.FAKE_LRD_BROKEN || process.env.FAKE_LRD_PLUGIN)) {
     process.stderr.write("Error loading config.toml: invalid transport\nin `mcp_servers.lrd`\n");
     process.exit(1);
   }
   let input = "";
   process.stdin.on("data", (d) => (input += d));
   process.stdin.on("end", () => {
-    const lrdOff = a.includes("mcp_servers.lrd.enabled=false");
+    const lrdOff = a.includes("mcp_servers.lrd.enabled=false") || a.includes("plugins.lrd-connector@personal.enabled=false");
     console.log(JSON.stringify({ type: "thread.started", thread_id: "th_test" }));
     console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text: `OK len=${input.length} lrdOff=${lrdOff}` } }));
     console.log(JSON.stringify({ type: "turn.completed", usage: {} }));

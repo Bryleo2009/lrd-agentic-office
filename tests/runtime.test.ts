@@ -192,3 +192,12 @@ test("errores de Codex/Claude se explican en lenguaje claro", async () => {
   assert.match(other.hint, /something weird happened/);
   assert.equal(commandExitReason(127), "el comando no existe en esta máquina");
 });
+
+test("config.toml de Codex: distingue MCP propios de los aportados por plugins", async () => {
+  const { parseCodexConfig, pluginForServer } = await import("../src/server/runtime/codexConfig");
+  const cfg = parseCodexConfig(`model = "x"\n[plugins."lrd-connector@personal"]\nenabled = true\n[plugins."pdf@openai-primary-runtime"]\nenabled = true\n[plugins."old@x"]\nenabled = false\n[mcp_servers.node_repl]\ncommand = 'C:\\\\x'\n[mcp_servers.node_repl.env]\nA = "1"\n`);
+  assert.deepEqual(cfg.mcpServers, ["node_repl"]);
+  assert.deepEqual(cfg.enabledPlugins, ["lrd-connector@personal", "pdf@openai-primary-runtime"]);
+  assert.equal(pluginForServer("lrd", cfg), "lrd-connector@personal");
+  assert.equal(pluginForServer("rappi", cfg), null);
+});

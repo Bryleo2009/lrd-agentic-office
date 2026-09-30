@@ -23,7 +23,7 @@ const RULES: Rule[] = [
       return server
         ? {
             title: `${e} no pudo leer su configuración: el servidor MCP «${server}» está mal definido`,
-            hint: `En ${file}, la sección [mcp_servers.${server}] necesita \`command\` (servidor local) o \`url\` (servidor remoto), y tu versión de ${e} debe soportar ese tipo. Corrígela o coméntala, o actualiza ${e}. Puedes comprobarlo con \`${fix} mcp list\`.`,
+            hint: `En ${file}, la sección [mcp_servers.${server}] necesita \`command\` (servidor local) o \`url\` (servidor remoto), y tu versión de ${e} debe soportar ese tipo. Corrígela o coméntala, o actualiza ${e}. Si no tienes esa sección, «${server}» viene de un plugin de ${e} que la oficina no pudo identificar para desactivarlo: permite ese servidor de datos en la misión o desactiva el plugin. Puedes comprobarlo con \`${fix} mcp list\`.`,
           }
         : { title: `${e} no pudo leer su configuración`, hint: `Revisa ${file}: tiene un valor inválido. El detalle técnico indica la línea.` };
     },

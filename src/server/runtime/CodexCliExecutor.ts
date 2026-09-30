@@ -2,6 +2,7 @@ import { isToolMcp, type RuntimeStatus } from "../../shared/types";
 import { config } from "../config";
 import type { AgentSession, AgentTask } from "./AgentExecutor";
 import { BaseCliExecutor, type Invocation } from "./BaseCliExecutor";
+import { pluginForServer, readCodexConfig } from "./codexConfig";
 import { CodexJsonParser } from "./parsers/codexParser";
 import { run } from "./processUtils";
 
@@ -99,7 +100,19 @@ export class CodexCliExecutor extends BaseCliExecutor {
   /** Desactiva los MCP para esta invocación si la misión no los permite. */
   private mcpArgs(session: AgentSession): string[] {
     const allow = new Set(session.config.mcpAllow);
-    return (this.status?.mcpServers ?? []).filter((m) => m.enabled && !allow.has(m.name) && /^[\w-]+$/.test(m.name)).flatMap((m) => ["-c", `mcp_servers.${m.name}.enabled=false`]);
+    const cfg = readCodexConfig();
+    const args: string[] = [];
+    const plugins = new Set<string>();
+    for (const m of this.status?.mcpServers ?? []) {
+      if (!m.enabled || allow.has(m.name) || !/^[\w-]+$/.test(m.name)) continue;
+      // Un MCP aportado por un plugin no está en [mcp_servers.<n>]: `mcp_servers.<n>.enabled=false`
+      // crearía una entrada sin command/url ("invalid transport"). Se desactiva el plugin completo.
+      const plugin = cfg && !cfg.mcpServers.includes(m.name) ? pluginForServer(m.name, cfg) : null;
+      if (plugin && /^[\w@-]+$/.test(plugin)) plugins.add(plugin);
+      else args.push("-c", `mcp_servers.${m.name}.enabled=false`);
+    }
+    for (const p of plugins) args.push("-c", `plugins.${p}.enabled=false`);
+    return args;
   }
 
   /**
