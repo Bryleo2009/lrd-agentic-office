@@ -1,7 +1,7 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId, AgentSessionInfo, Mission, MissionStep, Provider } from "../../shared/types";
-import { db, schema } from "./db";
+import { db, schema, sqlite } from "./db";
 
 const now = () => new Date().toISOString();
 
@@ -211,4 +211,20 @@ export function upsertRepository(r: { id: string; name: string; github: string; 
   const ex = db.select().from(schema.repositories).where(eq(schema.repositories.id, r.id)).get();
   if (ex) db.update(schema.repositories).set(r).where(eq(schema.repositories.id, r.id)).run();
   else db.insert(schema.repositories).values(r).run();
+}
+
+// ---------- reanudación ----------
+/** Misiones que quedaron en curso (el servidor se detuvo en medio). */
+export function interruptedMissionIds(): string[] {
+  return (
+    sqlite
+      .prepare(`SELECT id FROM missions WHERE status IN ('created','preparing','planning','running','qa','committing') ORDER BY created_at`)
+      .all() as { id: string }[]
+  ).map((r) => r.id);
+}
+
+/** Suma un intento de reanudación y devuelve el total. */
+export function bumpResume(id: string): number {
+  sqlite.prepare("UPDATE missions SET resumes = resumes + 1 WHERE id = ?").run(id);
+  return (sqlite.prepare("SELECT resumes FROM missions WHERE id = ?").get(id) as { resumes: number } | undefined)?.resumes ?? 0;
 }

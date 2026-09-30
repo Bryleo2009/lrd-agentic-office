@@ -63,7 +63,11 @@ interface MissionRuntime {
   /** Último agente que editó cada repositorio (recibe las fallas de QA de ese repo). */
   lastWriter: Map<string, AgentId>;
   repos: Map<string, WorkRepo>;
+  /** Pasos que se cortaron por un reinicio del servidor y se vuelven a ejecutar. */
+  restarted: Set<string>;
 }
+
+const newRuntime = (): MissionRuntime => ({ cancelled: false, qaSignals: new Set(), lastWriter: new Map(), repos: new Map(), restarted: new Set() });
 
 export class MissionError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -194,10 +198,55 @@ export class AgentOrchestrator {
       });
     if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcpServers.join(", ")} (sólo lectura)`, status: "warning" });
     this.pushMission(id);
-    const rt: MissionRuntime = { cancelled: false, qaSignals: new Set(), lastWriter: new Map(), repos: new Map() };
+    const rt = newRuntime();
     this.active.set(id, rt);
     void this.run(id, rs, rt).finally(() => this.active.delete(id));
     return repo.getMission(id)!;
+  }
+
+  /**
+   * Al arrancar el servidor: retoma las misiones que quedaron en curso. Los pasos terminados se
+   * conservan y los que se cortaron se repiten. Tras varios reinicios seguidos se da por fallida
+   * (evita un bucle si es la propia misión la que tumba el servidor).
+   */
+  async resumeInterrupted(): Promise<string[]> {
+    const ids = repo.interruptedMissionIds().filter((id) => !this.active.has(id));
+    if (!ids.length) return [];
+    await runtime.detect().catch(() => undefined);
+    const resumed: string[] = [];
+    for (const id of ids) {
+      const m = repo.getMission(id);
+      if (!m) continue;
+      const n = repo.bumpResume(id);
+      if (n > config.maxResumes) {
+        this.setMission(id, { status: "failed", error: `La misión se interrumpió ${n} veces por reinicios del servidor; no se retoma automáticamente.` });
+        for (const s of m.steps) if (s.status === "pending" || s.status === "running") this.setStep(id, s, { status: "cancelled" });
+        this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_BLOCKED", title: "Misión detenida: demasiados reinicios", detail: "Vuelve a lanzarla cuando el servidor esté estable.", status: "error", metadata: { missionFailed: true } });
+        continue;
+      }
+      let rs: RepositoryConfig[];
+      try {
+        const repoIds = m.repos.length ? m.repos.map((r) => r.repositoryId) : m.repositoryId === NO_REPO ? [] : [m.repositoryId];
+        rs = repoIds.map((r) => this.repoConfig(r));
+      } catch (e) {
+        this.setMission(id, { status: "failed", error: `No se pudo retomar: ${(e as Error).message}` });
+        continue;
+      }
+      this.emit(id, "atlas", {
+        provider: "system",
+        sessionId: null,
+        type: "AGENT_STATUS",
+        title: "Retomando la misión tras reiniciar el servidor",
+        detail: `Intento ${n} de ${config.maxResumes}. Lo que el equipo ya terminó se conserva.`,
+        status: "info",
+        metadata: { resumed: true },
+      });
+      const rt = newRuntime();
+      this.active.set(id, rt);
+      void this.run(id, rs, rt).finally(() => this.active.delete(id));
+      resumed.push(id);
+    }
+    return resumed;
   }
 
   async cancelMission(id: string): Promise<void> {
@@ -241,27 +290,9 @@ export class AgentOrchestrator {
       this.setMission(id, { worktree: primary.wt, ...(multi ? { repos: mission.repos.map((x) => ({ ...x, worktree: rt.repos.get(x.repositoryId)?.wt ?? null })) } : {}) });
       if (rt.cancelled) throw new MissionError("Cancelada");
 
-      // 2) Plan real con Atlas
-      this.setMission(id, { status: "planning" });
-      const planStep: MissionStep = this.newStep(id, "plan", "atlas", "Planificar misión", mission.prompt, [], false, "plan");
-      repo.addStep(planStep, 0);
-      const plan = await this.plan(id, rs, primary.wt, mission, planStep, rt);
+      // 2) Plan real con Atlas (o el que ya existía, si la misión se retoma) → 3) pasos del DAG
+      const steps = await this.prepareSteps(id, mission, rs, primary.wt, rt);
       if (rt.cancelled) throw new MissionError("Cancelada");
-
-      // 3) Pasos del DAG
-      const steps = this.materializePlan(id, plan, mission, rs);
-      steps.forEach((s, i) => repo.addStep(s, i + 1));
-      this.setMission(id, { status: "running", planSource: plan.source });
-      const repoTag = (s: MissionStep) => (multi && s.repositoryId ? ` [${rt.repos.get(s.repositoryId)?.cfg.shortName ?? s.repositoryId}]` : "");
-      this.emit(id, "atlas", {
-        provider: plan.source === "ai" ? mission.provider : "system",
-        sessionId: null,
-        type: "PLAN_CREATED",
-        title: `Plan: ${steps.filter((s) => s.kind === "agent").map((s) => `${getAgent(s.agentId).name}${repoTag(s)}`).join(" → ")}`,
-        detail: steps.map((s) => `• ${getAgent(s.agentId).name}${repoTag(s)}: ${s.title}${s.dependsOn.length ? ` (tras ${s.dependsOn.join(", ")})` : ""}`).join("\n"),
-        status: "success",
-        metadata: { source: plan.source, note: plan.note ?? null, steps: steps.map((s) => ({ id: s.id, agent: s.agentId, title: s.title, dependsOn: s.dependsOn, kind: s.kind, repositoryId: s.repositoryId ?? null })) },
-      });
 
       const dag = new MissionDagExecutor(steps, {
         isCancelled: () => rt.cancelled,
@@ -315,16 +346,20 @@ export class AgentOrchestrator {
   private async deliverRepo(id: string, mission: Mission, w: WorkRepo, steps: MissionStep[], rt: MissionRuntime, prefs: { publish: boolean; directToBase: boolean }, multi: boolean): Promise<MissionRepo> {
     const out: MissionRepo = { repositoryId: w.cfg.id, baseBranch: w.base, worktree: w.wt, branch: null, commitSha: null, pushed: false, prUrl: null };
     const status = await gitManager.status(w.wt);
-    if (!status.trim()) {
+    // Si la misión se retoma, puede que la rama o el commit ya existan (el reinicio fue a mitad de la entrega).
+    const current = await gitManager.currentBranch(w.wt).catch(() => "HEAD");
+    const onBranch = current.startsWith("agentic/");
+    const pending = !status.trim() && (onBranch || (await gitManager.aheadOf(w.wt, w.base)) > 0);
+    if (!status.trim() && !pending) {
       if (multi) this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: `${w.cfg.name}: sin cambios, no se crea rama`, status: "info" });
       return out;
     }
     const tag = multi ? ` (${w.cfg.name})` : "";
-    const direct = prefs.directToBase && !isProtected(w.base);
-    if (prefs.directToBase && !direct)
+    const direct = !onBranch && prefs.directToBase && !isProtected(w.base);
+    if (prefs.directToBase && !direct && !onBranch)
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${w.base} está protegida${tag}: se usa una rama nueva`, status: "warning" });
-    const branch = direct ? w.base : `agentic/${mission.area}/${slugify(mission.prompt)}-${id}`;
-    if (!direct) {
+    const branch = onBranch ? current : direct ? w.base : `agentic/${mission.area}/${slugify(mission.prompt)}-${id}`;
+    if (!direct && !onBranch) {
       await gitManager.createBranch(w.wt, branch);
       repo.insertBranch({ repositoryId: w.cfg.id, missionId: id, name: branch, base: w.base, worktree: w.wt });
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_BRANCH", title: `Rama ${branch}${tag}`, detail: `desde origin/${w.base}`, status: "success", metadata: { branch, base: w.base, repositoryId: w.cfg.id } });
@@ -333,7 +368,7 @@ export class AgentOrchestrator {
     const mine = steps.filter((s) => s.writes && s.status === "done" && (s.repositoryId ?? w.cfg.id) === w.cfg.id);
     const agents = [...new Set(mine.map((s) => getAgent(s.agentId).name))];
     const msg = `${mission.area}: ${firstLine(mission.prompt, 60)}\n\nMisión ${id} · LRD Agentic Office\nAgentes: ${agents.join(", ") || "—"}\nMotor: ${mission.provider}\nBase: ${w.base}`;
-    const sha = await gitManager.commit(w.wt, msg, direct ? branch : undefined);
+    const sha = status.trim() ? await gitManager.commit(w.wt, msg, direct ? branch : undefined) : await gitManager.headSha(w.wt);
     if (!sha) return out;
     out.commitSha = sha;
     repo.insertDelivery({ missionId: id, kind: "commit", ref: sha });
@@ -369,25 +404,7 @@ export class AgentOrchestrator {
   private async runWithoutRepo(id: string, mission: Mission, rt: MissionRuntime): Promise<void> {
     const cwd = path.join(paths.runs, id, "workspace");
     fs.mkdirSync(cwd, { recursive: true });
-    this.setMission(id, { status: "planning" });
-    const planStep = this.newStep(id, "plan", "atlas", "Planificar misión", mission.prompt, [], false, "plan");
-    repo.addStep(planStep, 0);
-    const plan = await this.plan(id, [], cwd, mission, planStep, rt);
-    if (rt.cancelled) throw new MissionError("Cancelada");
-    plan.deliverable = "analysis";
-    for (const s of plan.steps) s.writes = false;
-    const steps = this.materializePlan(id, plan, mission, []);
-    steps.forEach((s, i) => repo.addStep(s, i + 1));
-    this.setMission(id, { status: "running", planSource: plan.source });
-    this.emit(id, "atlas", {
-      provider: plan.source === "ai" ? mission.provider : "system",
-      sessionId: null,
-      type: "PLAN_CREATED",
-      title: `Plan: ${steps.filter((s) => s.kind === "agent").map((s) => getAgent(s.agentId).name).join(" → ")}`,
-      detail: steps.map((s) => `• ${getAgent(s.agentId).name}: ${s.title}`).join("\n"),
-      status: "success",
-      metadata: { source: plan.source, noRepo: true },
-    });
+    const steps = await this.prepareSteps(id, mission, [], cwd, rt, true);
     const dag = new MissionDagExecutor(steps, {
       isCancelled: () => rt.cancelled,
       onSkip: (s, reason) => this.setStep(id, s, { status: "skipped", error: reason }),
@@ -398,6 +415,65 @@ export class AgentOrchestrator {
     if (failed.length) throw new MissionError(`${getAgent(failed[0].agentId).name} no pudo completar "${failed[0].title}": ${failed[0].error ?? "error"}`);
     this.setMission(id, { status: "done" });
     this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true } });
+  }
+
+  /**
+   * Plan + pasos de la misión. Si la misión se retoma tras un reinicio, reutiliza lo que ya había:
+   * pasos terminados se conservan; los que quedaron a medias vuelven a "pendiente" y se repiten.
+   */
+  private async prepareSteps(id: string, mission: Mission, rs: RepositoryConfig[], cwd: string, rt: MissionRuntime, noRepo = false): Promise<MissionStep[]> {
+    const existing = repo.getMission(id)?.steps ?? [];
+    const rest = existing.filter((s) => s.kind !== "plan");
+    if (rest.length) {
+      for (const s of rest) {
+        if (s.status === "running" || s.status === "cancelled") {
+          rt.restarted.add(s.id);
+          this.setStep(id, s, { status: "pending", error: null });
+        }
+        if (s.writes && s.status === "done") rt.lastWriter.set(s.repositoryId ?? rs[0]?.id ?? "", s.agentId);
+      }
+      this.setMission(id, { status: "running" });
+      const done = rest.filter((s) => s.status === "done").length;
+      this.emit(id, "atlas", {
+        provider: "system",
+        sessionId: null,
+        type: "AGENT_STATUS",
+        title: `Retomando la misión: ${done} paso(s) ya terminados, ${rest.length - done} por hacer`,
+        detail: rest.map((s) => `• ${getAgent(s.agentId).name}: ${s.title} — ${s.status === "done" ? "hecho" : rt.restarted.has(s.id) ? "se repite (quedó a medias)" : "pendiente"}`).join("\n"),
+        status: "info",
+      });
+      return rest;
+    }
+
+    this.setMission(id, { status: "planning" });
+    let planStep = existing.find((s) => s.kind === "plan");
+    if (!planStep) {
+      planStep = this.newStep(id, "plan", "atlas", "Planificar misión", mission.prompt, [], false, "plan");
+      repo.addStep(planStep, 0);
+    }
+    // Si Atlas ya había planificado antes del reinicio, se reutiliza su plan.
+    let plan = planStep.status === "done" && planStep.result ? parsePlan(planStep.result, mission.prompt, rs) : null;
+    if (!plan) plan = await this.plan(id, rs, cwd, mission, planStep, rt);
+    if (rt.cancelled) throw new MissionError("Cancelada");
+    if (noRepo) {
+      plan.deliverable = "analysis";
+      for (const s of plan.steps) s.writes = false;
+    }
+    const steps = this.materializePlan(id, plan, mission, rs);
+    steps.forEach((s, i) => repo.addStep(s, i + 1));
+    this.setMission(id, { status: "running", planSource: plan.source });
+    const multi = rs.length > 1;
+    const repoTag = (s: MissionStep) => (multi && s.repositoryId ? ` [${rs.find((x) => x.id === s.repositoryId)?.shortName ?? s.repositoryId}]` : "");
+    this.emit(id, "atlas", {
+      provider: plan.source === "ai" ? mission.provider : "system",
+      sessionId: null,
+      type: "PLAN_CREATED",
+      title: `Plan: ${steps.filter((s) => s.kind === "agent").map((s) => `${getAgent(s.agentId).name}${repoTag(s)}`).join(" → ")}`,
+      detail: steps.map((s) => `• ${getAgent(s.agentId).name}${repoTag(s)}: ${s.title}${s.dependsOn.length ? ` (tras ${s.dependsOn.join(", ")})` : ""}`).join("\n"),
+      status: "success",
+      metadata: { source: plan.source, note: plan.note ?? null, noRepo, steps: steps.map((s) => ({ id: s.id, agent: s.agentId, title: s.title, dependsOn: s.dependsOn, kind: s.kind, repositoryId: s.repositoryId ?? null })) },
+    });
+    return steps;
   }
 
   private newStep(missionId: string, id: string, agentId: AgentId, title: string, task: string, dependsOn: string[], writes: boolean, kind: MissionStep["kind"], repositoryId: string | null = null): MissionStep {
@@ -532,7 +608,11 @@ Tu tarea (${step.title}):
 ${step.task}
 ${ctx}
 
-${writes}
+${writes}${
+      rt.restarted.has(step.id)
+        ? "\n\nNota: este paso se interrumpió porque el servidor de la oficina se reinició, y ahora se retoma. Puede haber cambios parciales tuyos en la carpeta: revisa `git status` y `git diff`, y continúa desde ahí sin duplicar trabajo."
+        : ""
+    }
 No hagas git commit/push ni cambies de rama: el orquestador controla Git.
 Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" seguida de una frase corta (máx. 12 palabras) de lo que encontraste o hiciste.`;
   }

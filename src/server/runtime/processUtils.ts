@@ -1,6 +1,7 @@
 import spawn from "cross-spawn";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { config } from "../config";
+import { trackChild } from "./childRegistry";
 
 /**
  * Entorno para procesos hijo (codex / claude / git).
@@ -80,12 +81,14 @@ export function run(
 }
 
 export function spawnStreaming(cmd: string, args: string[], opts: SpawnOptions): ChildProcess {
-  return spawn(cmd, args, {
+  const child = spawn(cmd, args, {
     ...opts,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
   });
+  trackChild(child);
+  return child;
 }
 
 export function killTree(child: ChildProcess | null | undefined): void {

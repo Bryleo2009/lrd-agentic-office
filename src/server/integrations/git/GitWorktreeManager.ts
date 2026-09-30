@@ -94,9 +94,29 @@ export class GitWorktreeManager {
    */
   async createWorktree(repo: RepositoryConfig, missionId: string, base: string): Promise<string> {
     const wt = path.join(paths.worktrees, missionId, repo.shortName);
+    // Misión retomada tras un reinicio: se reutiliza el worktree con el trabajo que ya tenía.
+    if (fs.existsSync(wt)) {
+      const ok = await git(["rev-parse", "--is-inside-work-tree"], wt).then(
+        (v) => v === "true",
+        () => false,
+      );
+      if (ok) return wt;
+      fs.rmSync(wt, { recursive: true, force: true });
+      await git(["worktree", "prune"], this.repoPath(repo)).catch(() => undefined);
+    }
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     await git(["worktree", "add", "--detach", wt, `origin/${base}`], this.repoPath(repo));
     return wt;
+  }
+
+  /** Commits del worktree que aún no están en origin/<base> (p. ej. un commit que no alcanzó a publicarse). */
+  async aheadOf(wt: string, base: string): Promise<number> {
+    const n = await git(["rev-list", "--count", `origin/${base}..HEAD`], wt).catch(() => "0");
+    return Number(n) || 0;
+  }
+
+  async headSha(wt: string): Promise<string> {
+    return git(["rev-parse", "HEAD"], wt);
   }
 
   /** Crea la rama agentic/... en el worktree (con los cambios ya presentes). Nunca toca la rama base. */

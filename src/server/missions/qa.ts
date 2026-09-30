@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { RepositoryConfig } from "../../shared/types";
+import { trackChild } from "../runtime/childRegistry";
 import { childEnv, killTree } from "../runtime/processUtils";
 import { summarizeOutput } from "../runtime/parsers/common";
 
@@ -106,6 +107,7 @@ export function runShell(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
+    trackChild(child);
     if (opts.signal) opts.signal.kill = () => killTree(child);
     const onData = (d: Buffer) => {
       const s = d.toString();

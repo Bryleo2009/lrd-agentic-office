@@ -13,12 +13,14 @@ if (a[0] !== "exec") process.exit(0);
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
+  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, pid: process.pid, resumed: input.includes("se interrumpió") }) + "\n");
   const say = (text) => {
     console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
     console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text } }));
     console.log(JSON.stringify({ type: "turn.completed", usage: {} }));
   };
   if (input.includes("SOLO planificar")) {
+    log({ kind: "plan" });
     const plan = { deliverable: "code_change", steps: [
       { id: "s1", agent: "diego", title: "Endpoint de totales", task: "Agregar endpoint GET /api/totales", dependsOn: [], writes: true, repo: "lrd-back" },
       { id: "s2", agent: "mica", title: "Pantalla de totales", task: "Mostrar totales de GET /api/totales", dependsOn: [], writes: true, repo: "lrd-front" },
@@ -28,12 +30,14 @@ process.stdin.on("end", () => {
   if (input.includes("Puedes modificar archivos")) {
     const who = input.includes("Pantalla de totales") ? "front" : "back";
     const t0 = Date.now();
+    log({ kind: "agent", who });
     setTimeout(() => {
       fs.writeFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who}\n`);
       fs.appendFileSync(process.env.FAKE_TIMELINE, JSON.stringify({ who, start: t0, end: Date.now(), cwd: process.cwd() }) + "\n");
       say(`Listo en ${who}.\nRESUMEN: cambio aplicado en ${who}`);
-    }, 1500);
+    }, Number(process.env.FAKE_AGENT_MS ?? 1500));
     return;
   }
+  log({ kind: "review" });
   say("Revisé los cambios de ambos repositorios; todo coherente.\nRESUMEN: back y front listos");
 });

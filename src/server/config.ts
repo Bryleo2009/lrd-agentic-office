@@ -50,6 +50,8 @@ export const config = {
   qaFixIterations: Math.max(0, Number(env.QA_FIX_ITERATIONS ?? 1)),
   /** Comandos de QA a la vez (build, lint, pruebas). 1 = en serie. */
   qaParallel: Math.max(1, Number(env.QA_PARALLEL ?? 3)),
+  /** Veces que una misión se retoma sola tras reinicios del servidor antes de darla por fallida. */
+  maxResumes: Math.max(0, Number(env.MISSION_MAX_RESUMES ?? 3)),
   /** Pausa (ms) tras handoffs/reuniones para que la oficina alcance a representarlos. 0 = sin pausa. */
   visualPacingMs: Math.max(0, Number(env.VISUAL_PACING_MS ?? 4000)),
   stepTimeoutMs: Math.max(1, Number(env.AGENT_STEP_TIMEOUT_MIN ?? 30)) * 60_000,

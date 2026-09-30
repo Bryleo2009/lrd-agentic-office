@@ -52,16 +52,10 @@ if (!cols.includes("repos")) sqlite.exec("ALTER TABLE missions ADD COLUMN repos 
 const stepCols = (sqlite.prepare("PRAGMA table_info(mission_steps)").all() as { name: string }[]).map((c) => c.name);
 if (!stepCols.includes("repository_id")) sqlite.exec("ALTER TABLE mission_steps ADD COLUMN repository_id TEXT");
 
-// Misiones que quedaron a medias por un reinicio del servidor: se marcan como fallidas (error real, no éxito).
-sqlite
-  .prepare(
-    `UPDATE missions SET status='failed', error=COALESCE(error,'El servidor se reinició durante la misión'), updated_at=?
-     WHERE status IN ('created','preparing','planning','running','qa','committing')`,
-  )
-  .run(new Date().toISOString());
-sqlite
-  .prepare(`UPDATE mission_steps SET status='cancelled' WHERE status IN ('pending','running','waiting')`)
-  .run();
+if (!cols.includes("resumes")) sqlite.exec("ALTER TABLE missions ADD COLUMN resumes INTEGER NOT NULL DEFAULT 0");
+
+// Las misiones que quedaron a medias por un reinicio del servidor NO se dan por fallidas aquí:
+// el orquestador las retoma al arrancar (AgentOrchestrator.resumeInterrupted).
 
 export const db = drizzle(sqlite, { schema });
 export { schema };

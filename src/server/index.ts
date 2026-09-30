@@ -11,6 +11,7 @@ import { config, loadRepositories, PROJECT_ROOT, publicConfig } from "./config";
 import * as repo from "./database/repo";
 import { eventBus } from "./events/AgentEventBus";
 import { assertApiDisabled } from "./runtime/ApiExecutor";
+import { installShutdownHooks, reapOrphans } from "./runtime/childRegistry";
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
 import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
@@ -147,8 +148,20 @@ if (config.isProd) {
   });
 }
 
+// Procesos de agentes/QA que quedaron vivos de una ejecución anterior se cierran antes de retomar nada.
+installShutdownHooks();
+const reaped = reapOrphans();
+if (reaped) console.log(`[lrd] Se cerraron ${reaped} proceso(s) de agentes que quedaron de la ejecución anterior.`);
+
 await runtime.detect(true);
 await app.listen({ port: config.port, host: config.host });
+
+// Misiones que estaban en curso cuando se detuvo el servidor: se retoman desde donde quedaron.
+const resumed = await orchestrator.resumeInterrupted().catch((e) => {
+  console.error("[lrd] No se pudieron retomar misiones:", e);
+  return [] as string[];
+});
+if (resumed.length) console.log(`[lrd] Retomando ${resumed.length} misión(es) interrumpida(s): ${resumed.join(", ")}`);
 
 const rt = runtime.snapshot();
 const line = (s: (typeof rt)[number]) => `${s.installed && s.authenticated !== false ? "✓" : "✗"} ${s.label.padEnd(12)} ${s.version ?? ""} ${s.message}`;
