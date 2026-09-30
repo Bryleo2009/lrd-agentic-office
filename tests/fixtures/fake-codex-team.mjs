@@ -27,6 +27,11 @@ process.stdin.on("end", () => {
     ] };
     return say("```json\n" + JSON.stringify(plan) + "\n```");
   }
+  if (input.includes("te pide un CAMBIO")) {
+    fs.writeFileSync(path.join(process.cwd(), "chat-change.txt"), "ajuste pedido por chat\n");
+    log({ kind: "chat-change" });
+    return say("Hecho: ajusté el texto del filtro.\nRESUMEN: cambio aplicado");
+  }
   if (input.includes("GitHub Actions falló en")) {
     fs.writeFileSync(path.join(process.cwd(), "ci-fixed.txt"), "arreglado\n");
     log({ kind: "ci-fix" });

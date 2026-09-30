@@ -181,3 +181,32 @@ test("GitHub Actions: espera el verde; si falla por la misión, el desarrollador
   assert.match(n.ci[0].detail, /No se declara verde/);
   delete process.env.FAKE_GH_MODE;
 });
+
+test("chat: pedir un cambio sobre una misión terminada lo aplica en su misma rama, lo publica y espera Actions", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const { eventBus } = await import("../src/server/events/AgentEventBus");
+  let m = repo.getMission((await orchestrator.createMission({ prompt: "Implementa el filtro por origen en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id)!;
+  for (let i = 0; i < 400 && !["done", "failed"].includes(m.status); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    m = repo.getMission(m.id)!;
+  }
+  assert.equal(m.status, "done", m.error ?? "");
+  const before = m.commitSha;
+  const notes: string[] = [];
+  const onMsg = (msg: { kind: string; event?: { type: string; agentId: string | null; provider: string; detail: string | null } }) => {
+    const e = msg.event;
+    if (msg.kind === "event" && e && e.type === "AGENT_MESSAGE" && e.agentId === "mica" && e.provider === "system") notes.push(e.detail ?? "");
+  };
+  eventBus.on("message", onMsg);
+  const off = () => eventBus.off("message", onMsg);
+  await orchestrator.chat("mica", "Cambia el texto del botón del filtro a 'Origen'", m.id, "codex");
+  for (let i = 0; i < 200 && !notes.length; i++) await new Promise((r) => setTimeout(r, 200));
+  off();
+  assert.match(notes[0] ?? "", /Listo: commit .* en `agentic\/.*` \(publicado\)\. GitHub Actions: ✅ en verde/);
+  const after = repo.getMission(m.id)!;
+  assert.equal(after.status, "done");
+  assert.notEqual(after.commitSha, before);
+  assert.equal(after.branch, m.branch, "misma rama de la misión");
+  assert.match(git(["show", "--stat", "--format=%s", `refs/heads/${m.branch}`], front), /ajuste por chat[\s\S]*chat-change\.txt/);
+});

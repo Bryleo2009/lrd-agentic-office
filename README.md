@@ -66,6 +66,9 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
      base, le pasa el log al desarrollador, que corrige; se hace commit, se publica y se espera otra vez. Si falla también
      en la base, se informa que no lo causa la misión. Si la rama no dispara workflows o `gh` no tiene sesión, se dice
      claramente: nunca se declara verde sin una ejecución real en verde.
+   - **Ajustes por chat**: sobre una misión terminada, pídele un cambio al agente en su chat ("cambia…", "corrige…",
+     "ajusta…"). Edita en la carpeta de esa misión y la oficina hace el commit en la misma rama, la publica y espera
+     GitHub Actions. Las preguntas normales siguen siendo de solo lectura.
 4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 

@@ -133,7 +133,7 @@ export function inferArea(prompt: string, repo: RepositoryConfig | null): string
 
 /** La misión pide explícitamente modificar código (corregir, implementar, …). */
 export function asksChange(prompt: string): boolean {
-  return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona/.test(norm(prompt));
+  return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|\bcambio\b|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona|\bajusta|\bquita|reemplaza|renombra|\bedita|\baplica/.test(norm(prompt));
 }
 
 /**

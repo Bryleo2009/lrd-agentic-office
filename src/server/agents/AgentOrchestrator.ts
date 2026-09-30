@@ -10,7 +10,7 @@ import { gitManager, GitError, isProtected, slugify } from "../integrations/git/
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
 import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
-import { buildPlannerPrompt, deliveryPrefs, inferBase, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { asksChange, buildPlannerPrompt, deliveryPrefs, inferBase, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
@@ -485,7 +485,7 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
   }
 
   /** Commit + rama nueva + publicación de UN repositorio de la misión (si tiene cambios). */
-  private async deliverRepo(id: string, mission: Mission, w: WorkRepo, steps: MissionStep[], rt: MissionRuntime, prefs: { publish: boolean; directToBase: boolean }, multi: boolean): Promise<MissionRepo> {
+  private async deliverRepo(id: string, mission: Mission, w: WorkRepo, steps: MissionStep[], rt: MissionRuntime, prefs: { publish: boolean; directToBase: boolean }, multi: boolean, commitTitle?: string): Promise<MissionRepo> {
     const out: MissionRepo = { repositoryId: w.cfg.id, baseBranch: w.base, worktree: w.wt, branch: null, commitSha: null, pushed: false, prUrl: null };
     const status = await gitManager.status(w.wt);
     // Si la misión se retoma, puede que la rama o el commit ya existan (el reinicio fue a mitad de la entrega).
@@ -509,7 +509,7 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
     out.branch = branch;
     const mine = steps.filter((s) => s.writes && s.status === "done" && (s.repositoryId ?? w.cfg.id) === w.cfg.id);
     const agents = [...new Set(mine.map((s) => getAgent(s.agentId).name))];
-    const msg = `${mission.area}: ${firstLine(mission.prompt, 60)}\n\nMisión ${id} · LRD Agentic Office\nAgentes: ${agents.join(", ") || "—"}\nMotor: ${mission.provider}\nBase: ${w.base}`;
+    const msg = `${mission.area}: ${commitTitle ?? firstLine(mission.prompt, 60)}\n\nMisión ${id} · LRD Agentic Office\nAgentes: ${agents.join(", ") || "—"}\nMotor: ${mission.provider}\nBase: ${w.base}`;
     const sha = status.trim() ? await gitManager.commit(w.wt, msg, direct ? branch : undefined) : await gitManager.headSha(w.wt);
     if (!sha) return out;
     out.commitSha = sha;
@@ -1065,16 +1065,24 @@ Termina con "RESUMEN:" y una frase corta.`;
     }
     const noRepoCwd = mission && mission.repositoryId === NO_REPO ? path.join(paths.runs, mission.id, "workspace") : null;
     if (noRepoCwd) fs.mkdirSync(noRepoCwd, { recursive: true });
-    const cwd = mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
+    // ¿Pide un cambio de código sobre una misión con repositorio ya terminada? Entonces el agente puede
+    // editar en la carpeta de esa misión y la oficina hace commit en su misma rama, la publica y espera CI.
+    const change = mission && mission.repositoryId !== NO_REPO && asksChange(message) ? this.chatChangeTarget(mission, agentId) : null;
+    if (change && this.active.has(mission!.id)) throw new MissionError("La misión todavía está en curso: espera a que termine para pedir ajustes por chat.", 409);
+    const cwd = change?.wt ?? mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
     const mid = mission?.id ?? null;
     const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", mcpAllow: mission?.mcpServers ?? [] }));
     if (entry.busy) throw new MissionError(`${getAgent(agentId).name} está respondiendo otro mensaje`, 409);
-    entry.session.config.permission = "read-only";
+    entry.session.config.permission = change ? "workspace-write" : "read-only";
+    if (change) entry.session.config.cwd = change.wt;
 
-    let prompt = message;
+    const changeNote = change
+      ? `El usuario te pide un CAMBIO sobre la misión ${mission!.id}: puedes modificar archivos en tu carpeta (${change.cfg.name}, ${change.wt}). Haz el cambio mínimo y correcto${change.cfg.checkCommand ? ` y verifica con \`${change.cfg.checkCommand}\` o la parte relevante` : ""}. No hagas git commit/push ni cambies de rama: al terminar, la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions.`
+      : "No modifiques archivos: si el usuario pide un cambio de código, dile que lo pida con un verbo claro (p. ej. \"cambia…\", \"corrige…\") o que lance una misión.";
+    let prompt = change ? `${changeNote}\n\nMensaje del usuario: ${message}` : message;
     if (!entry.session.hasTurn) {
       const a = getAgent(agentId);
-      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. No modifiques archivos.\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\nMensaje del usuario: ${message}`;
+      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. ${changeNote}\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\nMensaje del usuario: ${message}`;
     }
     const exec = runtime.get(provider);
     entry.busy = true;
@@ -1093,10 +1101,74 @@ Termina con "RESUMEN:" y una frase corta.`;
         err = (e as Error).message;
       } finally {
         entry.busy = false;
+        entry.session.config.permission = "read-only";
         sessions.sync(entry, err ? "error" : "idle");
         eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
       }
+      if (change && !err) await this.deliverChatChange(mission!, agentId, change, message).catch((e) => this.chatNote(mission!.id, agentId, `No pude publicar el cambio: ${(e as Error).message}`));
     })();
+  }
+
+  /** Repo y carpeta donde un agente puede aplicar por chat un cambio sobre una misión terminada. */
+  private chatChangeTarget(m: Mission, agentId: AgentId): WorkRepo | null {
+    const ids = m.repos.length ? m.repos.map((r) => r.repositoryId) : [m.repositoryId];
+    const mine = m.steps.find((s) => s.agentId === agentId && s.kind === "agent" && s.repositoryId)?.repositoryId;
+    const rid = mine && ids.includes(mine) ? mine : ids[0];
+    const entry = m.repos.find((r) => r.repositoryId === rid);
+    const wt = entry?.worktree ?? m.worktree;
+    if (!wt || !fs.existsSync(wt)) throw new MissionError(`La carpeta de trabajo de la misión ${m.id} ya no existe; lanza una misión nueva para este cambio.`, 409);
+    let cfg: RepositoryConfig;
+    try {
+      cfg = this.repoConfig(rid);
+    } catch (e) {
+      throw new MissionError((e as Error).message, 409);
+    }
+    return { cfg, base: entry?.baseBranch ?? m.baseBranch, wt };
+  }
+
+  /** Mensaje del sistema en el chat del agente (se ve en su conversación). */
+  private chatNote(missionId: string, agentId: AgentId, text: string): void {
+    eventBus.publish({ missionId, agentId, provider: "system", sessionId: null, type: "AGENT_MESSAGE", title: firstLine(text, 120), detail: text, status: "info", metadata: { chat: true } });
+  }
+
+  /** Tras un cambio pedido por chat: commit en la rama de la misión, publicación y espera de GitHub Actions. */
+  private async deliverChatChange(m: Mission, agentId: AgentId, w: WorkRepo, message: string): Promise<void> {
+    if (!(await gitManager.status(w.wt)).trim()) {
+      this.chatNote(m.id, agentId, "No quedaron cambios en la carpeta de la misión, así que no hay nada que publicar.");
+      return;
+    }
+    const rt = newRuntime();
+    rt.repos.set(w.cfg.id, w);
+    rt.lastWriter.set(w.cfg.id, agentId);
+    this.active.set(m.id, rt);
+    const multi = m.repos.length > 1;
+    const prev = { status: m.status, error: m.error };
+    try {
+      this.setMission(m.id, { status: "committing" });
+      const steps = repo.getMission(m.id)!.steps;
+      const res = await this.deliverRepo(m.id, m, w, steps, rt, deliveryPrefs(m.prompt), multi, `ajuste por chat: ${firstLine(message, 50)}`);
+      const patchRepos = multi ? { repos: m.repos.map((r) => (r.repositoryId === res.repositoryId ? { ...r, ...res } : r)) } : {};
+      const isMain = !multi || res.repositoryId === m.repositoryId;
+      this.setMission(m.id, { ...patchRepos, ...(isMain ? { branch: res.branch, commitSha: res.commitSha, pushed: res.pushed, prUrl: res.prUrl ?? m.prUrl } : {}) });
+      let ciText = "";
+      if (res.pushed && res.commitSha && res.branch && config.ciWaitEnabled) {
+        this.setMission(m.id, { status: "ci" });
+        const ci = await this.ciLoop(m.id, m, w, res, steps, rt, multi);
+        ciText =
+          ci.state === "success" ? " GitHub Actions: ✅ en verde." : ci.state === "failure" || ci.state === "timeout" ? ` GitHub Actions: ❌ ${ci.detail}` : ` GitHub Actions: ⚠️ ${ci.detail}`;
+        if (isMain) this.setMission(m.id, { commitSha: res.commitSha });
+      }
+      this.setMission(m.id, { status: prev.status === "failed" ? "failed" : "done", error: prev.error });
+      this.chatNote(
+        m.id,
+        agentId,
+        res.commitSha
+          ? `Listo: commit \`${res.commitSha.slice(0, 7)}\` en \`${res.branch}\`${res.pushed ? " (publicado)" : " (sin publicar)"}.${ciText}`
+          : "No se creó commit (no había cambios que guardar).",
+      );
+    } finally {
+      this.active.delete(m.id);
+    }
   }
 
   /** Reconstruye contexto seguro de la misión (cuando el CLI no tiene la sesión). */
