@@ -75,7 +75,7 @@ test("guías por tipo de tarea: corrección de CI y consulta de datos", async ()
   assert.equal(taskKind("Dame info del pedido que termina en 201631", true), "data-lookup");
   assert.equal(taskKind("Implementa el filtro por origen", false), "general");
   assert.match(guideFor("ci-fix"), /Reproduce localmente[\s\S]*Nunca: desactivar/);
-  assert.match(guideFor("data-lookup"), /coincidencia parcial en `cabecera_ordens`/);
+  assert.match(guideFor("data-lookup"), /`LIKE .%<lo que dio>%.` sobre el número de orden y el correlativo en `cabecera_ordens`/);
   assert.equal(guideFor("general"), "");
 });
 
@@ -195,5 +195,5 @@ test("LRD Connector (servidor 'lrd') + un MCP de QA registrado: 'lrd' se toma co
   const { mcpRules } = await import("../src/server/missions/MissionPlanner");
   assert.match(mcpRules(["lrd", "lrd-qa"]), /lrd = Producción, lrd-qa = QA/);
   const { guideFor } = await import("../src/server/missions/guides");
-  assert.match(guideFor("data-lookup"), /ORD-RDMI-260930123604[\s\S]*LIKE '%260930123604'/);
+  assert.match(guideFor("data-lookup"), /SIEMPRE busca con `LIKE`[\s\S]*ORD-RDMI-260930123604[\s\S]*fecha de HOY[\s\S]*solo DESPUÉS, con el número completo/);
 });

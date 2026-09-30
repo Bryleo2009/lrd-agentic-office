@@ -1000,7 +1000,8 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
 
 Es una consulta puntual: respóndela directo con los datos, en pocas consultas (idealmente 1 a 3).
 - Si hay varias coincidencias, lístalas brevemente (máx. 5, con fecha y canal) y detalla la más reciente o la que mejor encaje; no investigues todas.
-- Un "no encontrado" (404, sin resultados) NO es una herramienta rota: antes de concluir, prueba la búsqueda parcial por número/correlativo y, si hay otro entorno (Producción / QA), búscalo también ahí. Di en qué entorno lo encontraste.
+- Órdenes/pedidos: busca SIEMPRE con LIKE '%<número dado>%' (número y correlativo; el prefijo tipo ORD-XXXX- varía y el usuario puede dar solo los últimos dígitos), de preferencia filtrando por la fecha de hoy y ampliando si no aparece. Las herramientas por número exacto, solo con el número completo que devolvió esa búsqueda.
+- Un "no encontrado" (404, sin resultados) NO es una herramienta rota: antes de concluir, amplía la búsqueda y, si hay otro entorno (Producción / QA), búscalo también ahí. Di en qué entorno lo encontraste.
 - No revises integraciones externas, código, logs ni permisos salvo que el usuario lo pida explícitamente.
 - Responde en pocas líneas, como se lo dirías a alguien del equipo.`;
       const step = this.newStep(id, "s1", who, "Consulta rápida", task, [], false, "agent");
