@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { ClaudeStreamParser } from "../src/server/runtime/parsers/claudeParser";
 import { CodexJsonParser } from "../src/server/runtime/parsers/codexParser";
 import { classifyCommand, unwrapShell } from "../src/server/runtime/parsers/common";
-import { parsePlan, rulesPlan, inferArea, inferRepo, isAnalysisOnly } from "../src/server/missions/MissionPlanner";
+import { parsePlan, rulesPlan, inferArea, inferRepo, isAnalysisOnly, deliveryPrefs } from "../src/server/missions/MissionPlanner";
 import { MissionDagExecutor } from "../src/server/missions/MissionDagExecutor";
 import type { MissionStep, RepositoryConfig } from "../src/shared/types";
 
@@ -170,4 +170,12 @@ test("planner: una misión que pide corregir no se degrada a análisis aunque la
   const onlyReview = parsePlan(ai, "Revisa por qué falla el CI de fase3.1");
   assert.equal(onlyReview?.deliverable, "analysis");
   assert.equal(onlyReview?.steps[0].writes, false);
+});
+
+test("entrega: por defecto rama nueva publicada; la misión puede pedir lo contrario", () => {
+  assert.deepEqual(deliveryPrefs("Corrige el CI de fase3.1"), { publish: true, directToBase: false });
+  assert.equal(deliveryPrefs("Corrige el CI pero no publiques la rama").publish, false);
+  assert.equal(deliveryPrefs("Arregla el bug, solo local").publish, false);
+  assert.equal(deliveryPrefs("Corrige esto directamente en la rama base").directToBase, true);
+  assert.equal(deliveryPrefs("Corrige esto sin crear rama").directToBase, true);
 });

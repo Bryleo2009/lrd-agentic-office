@@ -71,6 +71,18 @@ export function asksChange(prompt: string): boolean {
   return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona/.test(norm(prompt));
 }
 
+/**
+ * Preferencias de entrega escritas en la misión. Por defecto: rama nueva agentic/… publicada.
+ * - "no publiques", "solo local", "sin push" → la rama queda solo local.
+ * - "directo en la rama base", "sin crear rama" → commit sobre la base (si no está protegida).
+ */
+export function deliveryPrefs(prompt: string): { publish: boolean; directToBase: boolean } {
+  const p = norm(prompt);
+  const publish = !/no (la )?publiques|sin publicar|no (hagas )?push|sin push|no (la )?subas|solo local/.test(p);
+  const directToBase = /sin crear (una |ninguna )?rama|no crees (una |ninguna )?rama|directo en la rama|directamente (en|sobre) la rama/.test(p);
+  return { publish, directToBase };
+}
+
 export function isAnalysisOnly(prompt: string): boolean {
   const asksAnalysis = /analiza|revisa|explica|dime|por que|porque|investiga|diagn|valida/.test(norm(prompt));
   return asksAnalysis && !asksChange(prompt);

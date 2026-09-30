@@ -42,7 +42,7 @@ export const config = {
   codexCommand: env.CODEX_COMMAND || "codex",
   claudeCommand: env.CLAUDE_COMMAND || "claude",
   allowPaidApiFallback: bool(env.ALLOW_PAID_API_FALLBACK, false),
-  githubPushEnabled: bool(env.GITHUB_PUSH_ENABLED, false),
+  githubPushEnabled: bool(env.GITHUB_PUSH_ENABLED, true),
   githubPrEnabled: bool(env.GITHUB_PR_ENABLED, false),
   workspaceRoot: path.resolve(expandHome(env.LRD_WORKSPACE_ROOT || "~/.lrd-agentic-office")),
   agentEngines: parseAgentEngines(env.AGENT_ENGINES),

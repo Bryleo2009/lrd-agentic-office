@@ -159,7 +159,7 @@ export function NewMissionPanel() {
           {repoId === "auto" && <>Repositorio y rama son opcionales: si los dejas en automático, Atlas elige según la misión (o trabaja sin repo si es de datos). </>}
           {repoId === "none"
             ? "Sin repositorio: nadie modifica código; el equipo analiza y responde. "
-            : <>Se crea una rama <code>agentic/…</code> en un worktree aislado desde <code>{base || repo?.defaultBase || "la rama por defecto"}</code>. La rama base nunca se modifica. </>}
+            : <>Los agentes trabajan en un worktree aislado de <code>{base || repo?.defaultBase || "la rama por defecto"}</code>, sin crear ramas. Solo si hay cambios se crea una rama nueva <code>agentic/…</code> y se publica para evaluación (escribe "no publiques" o "directo en la rama base" para cambiarlo). La rama base nunca se modifica. </>}
           Push {config?.githubPushEnabled ? "habilitado" : "deshabilitado"} · PR {config?.githubPrEnabled ? "habilitado" : "deshabilitado"}.
         </div>
         {error && <div className="error-box">{error}</div>}

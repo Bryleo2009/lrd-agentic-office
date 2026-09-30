@@ -6,10 +6,10 @@ import { isToolMcp, NO_REPO, type AgentId, type EngineChoice, type Mission, type
 import { config, loadRepositories, paths } from "../config";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
-import { gitManager, GitError, slugify } from "../integrations/git/GitWorktreeManager";
+import { gitManager, GitError, isProtected, slugify } from "../integrations/git/GitWorktreeManager";
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
-import { buildPlannerPrompt, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { buildPlannerPrompt, deliveryPrefs, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
@@ -136,7 +136,8 @@ export class AgentOrchestrator {
       engine,
       provider,
       area,
-      branch: r ? `agentic/${area}/${slugify(prompt)}-${id}` : null,
+      // La rama se crea solo si hay cambios al final de la misión (ver commit).
+      branch: null,
       worktree: null,
       status: "created",
       error: null,
@@ -193,10 +194,8 @@ export class AgentOrchestrator {
       repo.upsertRepository({ id: r.id, name: r.name, github: r.github, cloneUrl: r.cloneUrl, localPath: repoPath, lastFetchAt: new Date().toISOString() });
       if (!(await gitManager.remoteBranchExists(r, mission.baseBranch)))
         throw new GitError(`La rama base origin/${mission.baseBranch} no existe en ${r.github}`, "");
-      const wt = await gitManager.createWorktree(r, id, mission.baseBranch, mission.branch!);
-      repo.insertBranch({ repositoryId: r.id, missionId: id, name: mission.branch!, base: mission.baseBranch, worktree: wt });
-      this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_BRANCH", title: `Rama ${mission.branch}`, detail: `desde origin/${mission.baseBranch}`, status: "success", metadata: { branch: mission.branch, base: mission.baseBranch } });
-      this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_WORKTREE", title: "Worktree aislado listo", detail: wt, status: "success", metadata: { worktree: wt } });
+      const wt = await gitManager.createWorktree(r, id, mission.baseBranch);
+      this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_WORKTREE", title: "Worktree aislado listo (sin rama)", detail: `${wt}\nCopia de origin/${mission.baseBranch}; la rama solo se crea si hay cambios.`, status: "success", metadata: { worktree: wt, base: mission.baseBranch } });
       this.setMission(id, { worktree: wt });
       if (rt.cancelled) throw new MissionError("Cancelada");
 
@@ -233,35 +232,49 @@ export class AgentOrchestrator {
         throw new MissionError(`${getAgent(f.agentId).name} no pudo completar "${f.title}": ${f.error ?? "error"}`);
       }
 
-      // 4) Commit (orquestador, nunca la IA)
+      // 4) Rama + commit (orquestador, nunca la IA). Sin cambios → no se crea ninguna rama.
       this.setMission(id, { status: "committing" });
       const status = await gitManager.status(wt);
+      const prefs = deliveryPrefs(mission.prompt);
       let sha: string | null = null;
+      let branch: string | null = null;
+      let direct = false;
       if (status.trim()) {
+        direct = prefs.directToBase && !isProtected(mission.baseBranch);
+        if (prefs.directToBase && !direct)
+          this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${mission.baseBranch} está protegida: se usa una rama nueva`, status: "warning" });
+        branch = direct ? mission.baseBranch : `agentic/${mission.area}/${slugify(mission.prompt)}-${id}`;
+        if (!direct) {
+          await gitManager.createBranch(wt, branch);
+          repo.insertBranch({ repositoryId: r.id, missionId: id, name: branch, base: mission.baseBranch, worktree: wt });
+          this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_BRANCH", title: `Rama ${branch}`, detail: `desde origin/${mission.baseBranch}`, status: "success", metadata: { branch, base: mission.baseBranch } });
+        }
+        this.setMission(id, { branch });
         const agents = [...new Set(steps.filter((s) => s.writes && s.status === "done").map((s) => getAgent(s.agentId).name))];
         const msg = `${mission.area}: ${firstLine(mission.prompt, 60)}\n\nMisión ${id} · LRD Agentic Office\nAgentes: ${agents.join(", ") || "—"}\nMotor: ${mission.provider}\nBase: ${mission.baseBranch}`;
-        sha = await gitManager.commit(wt, msg);
+        sha = await gitManager.commit(wt, msg, direct ? branch : undefined);
         if (sha) {
           repo.insertDelivery({ missionId: id, kind: "commit", ref: sha });
           const writer = rt.lastWriter ?? "diego";
-          this.emit(id, writer, { provider: "git", sessionId: null, type: "GIT_COMMIT", title: `Commit ${sha.slice(0, 7)}`, detail: msg, status: "success", metadata: { sha, branch: mission.branch } });
+          this.emit(id, writer, { provider: "git", sessionId: null, type: "GIT_COMMIT", title: `Commit ${sha.slice(0, 7)}`, detail: msg, status: "success", metadata: { sha, branch } });
           this.setMission(id, { commitSha: sha });
         }
       } else {
-        this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: "Sin cambios en el worktree: no se crea commit", status: "info" });
+        this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: "Sin cambios: no se crea rama ni commit", status: "info" });
       }
 
-      // 5) Push / PR controlados por flags
-      if (sha && config.githubPushEnabled) {
-        await gitManager.push(wt);
-        repo.insertDelivery({ missionId: id, kind: "push", ref: mission.branch! });
-        this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_PUSH", title: `Push de ${mission.branch}`, status: "success", metadata: { branch: mission.branch } });
+      // 5) Publicar la rama para evaluación (por defecto) / PR controlado por flag
+      const publish = config.githubPushEnabled && prefs.publish;
+      if (sha && branch && publish) {
+        await gitManager.push(wt, direct ? branch : undefined);
+        repo.insertDelivery({ missionId: id, kind: "push", ref: branch });
+        this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_PUSH", title: `Rama publicada: ${branch}`, detail: direct ? null : `Lista para evaluación contra ${mission.baseBranch}`, status: "success", metadata: { branch } });
         this.setMission(id, { pushed: true });
-        if (config.githubPrEnabled) {
+        if (config.githubPrEnabled && !direct) {
           const summary = repo.getMission(id)?.summary ?? "";
           const url = await github.createPr(wt, {
             base: mission.baseBranch,
-            head: mission.branch!,
+            head: branch,
             title: `[agentic] ${firstLine(mission.prompt, 70)}`,
             body: `${summary}\n\n---\nMisión \`${id}\` generada por LRD Agentic Office (${mission.provider}).`,
           });
@@ -271,11 +284,12 @@ export class AgentOrchestrator {
           this.setMission(id, { prUrl: url });
         }
       } else if (sha) {
-        this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: "Push deshabilitado (GITHUB_PUSH_ENABLED=false)", detail: `Rama local: ${mission.branch}`, status: "info" });
+        const why = prefs.publish ? "GITHUB_PUSH_ENABLED=false" : "la misión pidió no publicar";
+        this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Rama sin publicar (${why})`, detail: `Rama local: ${branch}`, status: "info" });
       }
 
       this.setMission(id, { status: "done" });
-      this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true, sha, branch: mission.branch } });
+      this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true, sha, branch } });
     } catch (e) {
       const err = e as Error;
       const cancelled = rt.cancelled;
@@ -427,7 +441,7 @@ export class AgentOrchestrator {
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${m.repositoryId === NO_REPO ? "Misión sin repositorio (análisis / datos)." : `Repositorio: ${m.repositoryId} · rama de trabajo ${m.branch} (base ${m.baseBranch}).`}${m.allowMcp ? mcpRules(m.mcpServers) : ""}
+${m.repositoryId === NO_REPO ? "Misión sin repositorio (análisis / datos)." : `Repositorio: ${m.repositoryId} · trabajas sobre una copia aislada de ${m.baseBranch}; si hay cambios, el orquestador crea una rama nueva y la publica.`}${m.allowMcp ? mcpRules(m.mcpServers) : ""}
 
 Tu tarea (${step.title}):
 ${step.task}

@@ -307,7 +307,7 @@ function ReposTab() {
     <div className="repos">
       <p className="fineprint">
         Indica dónde tienes clonado cada repositorio en esta PC. La oficina usará tu clon para hacer <code>git fetch</code> y crear los worktrees de cada misión:
-        tu rama actual y tus cambios sin commitear <b>no se tocan</b>. Las ramas <code>agentic/…</code> aparecerán en tu repo. Si lo dejas vacío, la app mantiene su propio clon.
+        tu rama actual y tus cambios sin commitear <b>no se tocan</b>. Solo si una misión deja cambios se crea una rama <code>agentic/…</code> y se publica para evaluación. Si lo dejas vacío, la app mantiene su propio clon.
       </p>
       {repos.map((r) => (
         <RepoRow key={r.id} repo={r} />

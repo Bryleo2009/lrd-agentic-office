@@ -88,16 +88,22 @@ export class GitWorktreeManager {
     return out.split(/\r?\n/).map((l) => l.replace(/^origin\//, "")).filter((l) => l && l !== "HEAD" && l !== "origin");
   }
 
-  /** Crea rama agentic/... desde origin/<base> en un worktree aislado. Nunca toca la rama base. */
-  async createWorktree(repo: RepositoryConfig, missionId: string, base: string, branch: string): Promise<string> {
-    if (!branch.startsWith("agentic/")) throw new GitError("Las ramas de misión deben empezar con agentic/", "");
-    assertNotProtected(branch);
+  /**
+   * Worktree aislado en HEAD separado (detached) sobre origin/<base>: no crea ninguna rama.
+   * La rama solo se crea si los agentes realmente modifican archivos (ver createBranch).
+   */
+  async createWorktree(repo: RepositoryConfig, missionId: string, base: string): Promise<string> {
     const wt = path.join(paths.worktrees, missionId, repo.shortName);
     fs.mkdirSync(path.dirname(wt), { recursive: true });
-    await git(["worktree", "add", "-b", branch, wt, `origin/${base}`], this.repoPath(repo));
-    // No rastrear la rama base: evita pushes accidentales hacia ella.
-    await git(["branch", "--unset-upstream", branch], wt).catch(() => undefined);
+    await git(["worktree", "add", "--detach", wt, `origin/${base}`], this.repoPath(repo));
     return wt;
+  }
+
+  /** Crea la rama agentic/... en el worktree (con los cambios ya presentes). Nunca toca la rama base. */
+  async createBranch(wt: string, branch: string): Promise<void> {
+    if (!branch.startsWith("agentic/")) throw new GitError("Las ramas de misión deben empezar con agentic/", "");
+    assertNotProtected(branch);
+    await git(["switch", "-c", branch], wt);
   }
 
   async currentBranch(wt: string): Promise<string> {
@@ -116,10 +122,11 @@ export class GitWorktreeManager {
     return { stat, files: names.split(/\r?\n/).filter(Boolean), patch };
   }
 
-  async commit(wt: string, message: string): Promise<string | null> {
-    const branch = await this.currentBranch(wt);
+  /** `targetBranch` solo para commits directos sobre una rama base no protegida (HEAD separado). */
+  async commit(wt: string, message: string, targetBranch?: string): Promise<string | null> {
+    const branch = targetBranch ?? (await this.currentBranch(wt));
     assertNotProtected(branch);
-    if (!branch.startsWith("agentic/")) throw new GitError(`Commit bloqueado: rama inesperada ${branch}`, "");
+    if (!targetBranch && !branch.startsWith("agentic/")) throw new GitError(`Commit bloqueado: rama inesperada ${branch}`, "");
     await git(["add", "-A"], wt);
     const staged = await git(["diff", "--cached", "--name-only"], wt);
     if (!staged.trim()) return null;
@@ -131,9 +138,14 @@ export class GitWorktreeManager {
     return git(["rev-parse", "HEAD"], wt);
   }
 
-  async push(wt: string): Promise<string> {
-    const branch = await this.currentBranch(wt);
+  async push(wt: string, targetBranch?: string): Promise<string> {
+    const branch = targetBranch ?? (await this.currentBranch(wt));
     assertNotProtected(branch);
+    if (targetBranch) {
+      // Commit directo sobre la rama base (pedido explícitamente): fast-forward, nunca --force.
+      await git(["push", "origin", `HEAD:refs/heads/${branch}`], wt, 5 * 60_000);
+      return branch;
+    }
     if (!branch.startsWith("agentic/")) throw new GitError(`Push bloqueado: rama inesperada ${branch}`, "");
     await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
     return branch;

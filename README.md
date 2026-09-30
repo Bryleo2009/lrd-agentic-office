@@ -50,8 +50,8 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
 
 1. Abre la oficina. Los 8 agentes viven aunque no haya misión.
 2. **Nueva misión**: escribe el pedido y elige *Repositorio*, *Rama base* (por defecto `release/fase2`) y *Motor IA* (Automático / Codex / Claude Code).
-3. El sistema hace de verdad: `git fetch` → crea la rama `agentic/…` → crea el worktree → Atlas planifica con el motor → los agentes trabajan (en paralelo cuando se puede) → Vega corre QA real (`npm run build`, `php artisan test`, …) → Atlas revisa el diff → **commit**.
-4. Push y PR sólo si los habilitas en `.env` (`GITHUB_PUSH_ENABLED=true`, `GITHUB_PR_ENABLED=true`).
+3. El sistema hace de verdad: `git fetch` → crea un worktree aislado (sin rama) → Atlas planifica con el motor → los agentes trabajan (en paralelo cuando se puede) → Vega corre QA real (`npm run build`, `php artisan test`, …) → Atlas revisa el diff → si hubo cambios, crea **una rama nueva** `agentic/…`, hace **commit** y la **publica** para evaluación. Si no hubo cambios, no se crea ninguna rama.
+4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
 ### Repositorio y rama opcionales
@@ -64,7 +64,7 @@ La elección se anuncia en la oficina. Con **Sin repo (análisis / datos)** nadi
 
 Pon la ruta de tu clon de `lrd-front` y `lrd-back` (p. ej. `C:\proyectos\lrd-front`). La oficina usará tu clon para
 `git fetch` y para crear los worktrees de cada misión: **tu rama actual y tus cambios sin commitear no se tocan**
-(los worktrees viven en `~/.lrd-agentic-office/worktrees`) y las ramas `agentic/…` aparecen en tu repo para que las revises.
+(los worktrees viven en `~/.lrd-agentic-office/worktrees`) y, solo cuando hay cambios, las ramas `agentic/…` aparecen en tu repo (y en `origin`) para que las revises.
 
 ### Datos reales vía MCP (Ajustes → Datos)
 
@@ -91,7 +91,8 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `CODEX_ENABLED` / `CLAUDE_ENABLED` | `true` | Habilitar motores |
 | `CODEX_COMMAND` / `CLAUDE_COMMAND` | `codex` / `claude` | Ruta de los binarios |
 | `ALLOW_PAID_API_FALLBACK` | `false` | Si es `false`, se eliminan `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` del entorno de los CLIs |
-| `GITHUB_PUSH_ENABLED` / `GITHUB_PR_ENABLED` | `false` | Push/PR controlados por el orquestador (nunca por la IA) |
+| `GITHUB_PUSH_ENABLED` | `true` | Publica la rama `agentic/…` cuando la misión deja cambios (lo hace el orquestador, nunca la IA) |
+| `GITHUB_PR_ENABLED` | `false` | Además abre un PR contra la rama base |
 | `LRD_WORKSPACE_ROOT` | `~/.lrd-agentic-office` | Clones, worktrees, logs crudos y `office.db` |
 | `AGENT_ENGINES` | — | Motor por agente en modo Automático, ej. `diego:claude,rafa:codex` |
 | `ATLAS_REVIEW_ENABLED` | `true` | Revisión final de Atlas con el motor IA |

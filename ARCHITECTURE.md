@@ -231,13 +231,15 @@ del destinatario. No existen conversaciones generadas en el cliente: la burbuja 
 ```
 1. `git fetch origin`
 2. validar rama base ∈ `allowedBases`
-3. `git worktree add -b agentic/<area>/<slug>-<id> <path> origin/<base>`
+3. `git worktree add --detach <path> origin/<base>` (sin rama)
 4. agentes trabajan en el worktree
 5. `git status --porcelain`, `git diff --stat` → `GIT_DIFF`
 6. QA real
-7. `git add -A && git commit` → `GIT_COMMIT` (sha real)
-8. `GITHUB_PUSH_ENABLED=true` → `git push -u origin <branch>` → `GIT_PUSH`
-9. `GITHUB_PR_ENABLED=true` → `gh pr create` → `PR_CREATED`
+7. sin cambios → no se crea rama. Con cambios → `git switch -c agentic/<area>/<slug>-<id>` → `GIT_BRANCH`
+   (o commit directo sobre la base si la misión lo pide y la base no está protegida)
+8. `git add -A && git commit` → `GIT_COMMIT` (sha real)
+9. `GITHUB_PUSH_ENABLED=true` (por defecto) y la misión no dice "no publiques" → `git push -u origin <branch>` → `GIT_PUSH`
+10. `GITHUB_PR_ENABLED=true` → `gh pr create` → `PR_CREATED`
 
 Guardas: nunca `checkout`/`commit`/`push` sobre `main`, `release/fase2`, `release/fase3.1` (lista `PROTECTED_BRANCHES`).
 Los prompts prohíben a los CLIs hacer `git push/commit`; además Claude se lanza con `--disallowedTools "Bash(git push*)" "Bash(git commit*)"…`.
