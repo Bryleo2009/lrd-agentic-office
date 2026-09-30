@@ -13,6 +13,7 @@ import { buildPlannerPrompt, deliveryPrefs, inferArea, inferRepo, isAnalysisOnly
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
+import { commandExitReason } from "../runtime/humanize";
 import { runtime } from "../runtime/RuntimeDetector";
 import { messageBus, type Handoff } from "./AgentMessageBus";
 import { sessions } from "./AgentSession";
@@ -469,7 +470,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
       entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission, mcpAllow: repo.getMission(missionId)?.mcpServers ?? [] });
     } catch (e) {
       const msg = (e as Error).message;
-      this.emit(missionId, agentId, { provider, sessionId: null, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} bloqueado`, detail: msg, status: "error" });
+      this.emit(missionId, agentId, { provider, sessionId: null, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} no pudo empezar`, detail: msg, status: "error" });
       return { ok: false, error: msg };
     }
     const exec = runtime.get(provider);
@@ -484,11 +485,14 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
         this.publishExecutorEvent(missionId, agentId, provider, entry.session.cliSessionId, ev, step);
         if (ev.type === "SESSION_CONNECTED" || ev.type === "SESSION_STARTED") sessions.sync(entry, "running");
         if (ev.type === "AGENT_FINISHED") finalText = ev.finalText ?? ev.detail ?? "";
-        if (ev.type === "AGENT_ERROR") error = `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
+        if (ev.type === "AGENT_ERROR") {
+          const hint = (ev.metadata as { hint?: string } | undefined)?.hint;
+          error = hint ? `${ev.title}. ${hint}` : `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
+        }
       }
     } catch (e) {
       error = (e as Error).message;
-      this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_ERROR", title: "Error del executor", detail: error, status: "error" });
+      this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_ERROR", title: "Error interno de la oficina al ejecutar al agente", detail: error, status: "error" });
     } finally {
       entry.busy = false;
       if (step) this.setStep(missionId, step, { sessionId: entry.session.cliSessionId });
@@ -496,7 +500,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     sessions.sync(entry, error ? "error" : "idle");
     if (rt.cancelled) return { ok: false, error: "Cancelada" };
     if (error) {
-      this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} bloqueado`, detail: error, status: "error" });
+      this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} no pudo continuar`, detail: error, status: "error" });
       return { ok: false, error };
     }
     return { ok: true, text: finalText };
@@ -603,7 +607,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
       provider: "qa",
       sessionId: null,
       type: isTest ? "TEST_FINISHED" : "COMMAND_FINISHED",
-      title: ok ? (isTest ? `${cmd} ✓` : `${cmd} listo`) : `${cmd} falló (exit ${res.exitCode})`,
+      title: ok ? (isTest ? `${cmd} ✓` : `${cmd} listo`) : res.exitCode === 1 && isTest ? `${cmd}: algunas pruebas fallaron` : `${cmd} falló: ${commandExitReason(res.exitCode)}`,
       command: cmd,
       detail: `${res.summary}\n\n${res.output.slice(-12000)}`,
       status: ok ? "success" : "error",

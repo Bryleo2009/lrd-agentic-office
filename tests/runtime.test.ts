@@ -179,3 +179,16 @@ test("entrega: por defecto rama nueva publicada; la misión puede pedir lo contr
   assert.equal(deliveryPrefs("Corrige esto directamente en la rama base").directToBase, true);
   assert.equal(deliveryPrefs("Corrige esto sin crear rama").directToBase, true);
 });
+
+test("errores de Codex/Claude se explican en lenguaje claro", async () => {
+  const { explainCliFailure, commandExitReason } = await import("../src/server/runtime/humanize");
+  const silent = explainCliFailure("codex", 1, "");
+  assert.match(silent.title, /Codex se cerró sin explicar/);
+  assert.match(silent.hint, /codex login/);
+  assert.match(explainCliFailure("codex", 1, "Error: Not logged in").title, /no tiene la sesión iniciada/);
+  assert.match(explainCliFailure("codex", 1, "stream error: 429 Too Many Requests").title, /límite de uso/);
+  assert.match(explainCliFailure("claude", 1, "getaddrinfo ENOTFOUND api.anthropic.com").title, /conexión/);
+  const other = explainCliFailure("codex", 1, "boom\nsomething weird happened");
+  assert.match(other.hint, /something weird happened/);
+  assert.equal(commandExitReason(127), "el comando no existe en esta máquina");
+});

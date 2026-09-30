@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Provider, RuntimeStatus } from "../../shared/types";
 import type { AgentExecutor, AgentSession, AgentTask, ExecutorEvent, SessionConfig } from "./AgentExecutor";
 import { ExecutorUnavailableError } from "./AgentExecutor";
+import { explainCliFailure, explainedDetail } from "./humanize";
 import { childEnv, killTree, readLines, spawnStreaming, tail, waitExit } from "./processUtils";
 
 export interface LineParser {
@@ -132,11 +133,13 @@ export abstract class BaseCliExecutor implements AgentExecutor {
       return;
     }
     if (timedOut) {
-      yield { type: "AGENT_ERROR", title: `Tiempo máximo excedido (${Math.round(timeoutMs / 60000)} min)`, status: "error", detail: tail(stderr, 1500) };
+      const min = Math.round(timeoutMs / 60000);
+      yield { type: "AGENT_ERROR", title: `La tarea tardó más de ${min} min y se detuvo`, status: "error", detail: `Divide la misión en partes más pequeñas o sube AGENT_STEP_TIMEOUT_MIN en .env.${stderr.trim() ? `\n\nDetalle técnico:\n${tail(stderr, 1500)}` : ""}`, metadata: { hint: "Divide la misión en partes más pequeñas o sube AGENT_STEP_TIMEOUT_MIN en .env." } };
       return;
     }
     if (spawnError) {
-      yield { type: "AGENT_ERROR", title: `No se pudo ejecutar ${this.command}`, detail: spawnError, status: "error" };
+      const ex = explainCliFailure(this.provider, 127, spawnError);
+      yield { type: "AGENT_ERROR", title: /ENOENT/.test(spawnError) ? ex.title : `No se pudo abrir ${this.command}`, detail: explainedDetail(ex, undefined, spawnError), status: "error", metadata: { hint: ex.hint } };
       return;
     }
     if (code !== 0 && !terminal && produced === 0 && attempt === 0) {
@@ -148,7 +151,8 @@ export abstract class BaseCliExecutor implements AgentExecutor {
       }
     }
     if (code !== 0 && !terminal) {
-      yield { type: "AGENT_ERROR", title: `${this.command} terminó con código ${code}`, detail: tail(stderr, 3000) || "(sin stderr)", status: "error", metadata: { exitCode: code } };
+      const ex = explainCliFailure(this.provider, code, stderr);
+      yield { type: "AGENT_ERROR", title: ex.title, detail: explainedDetail(ex, code, stderr), status: "error", metadata: { exitCode: code, hint: ex.hint } };
       return;
     }
     if (!terminal) {

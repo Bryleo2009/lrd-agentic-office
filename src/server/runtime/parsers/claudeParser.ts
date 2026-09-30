@@ -1,4 +1,5 @@
 import type { ExecutorEvent } from "../AgentExecutor";
+import { explainCliFailure, explainedDetail } from "../humanize";
 import { base, classifyCommand, clip, firstLine, rel, summarizeOutput } from "./common";
 
 interface PendingTool {
@@ -63,12 +64,17 @@ export class ClaudeStreamParser {
         this.finalText = typeof o.result === "string" ? o.result : this.lastAssistantText;
         const meta = { cliSessionId: o.session_id, turns: o.num_turns, durationMs: o.duration_ms, subtype: o.subtype };
         if (o.is_error || (o.subtype && o.subtype !== "success")) {
+          const raw = clip(String(o.result ?? o.subtype ?? "error"), 2000);
+          const ex =
+            o.subtype === "error_max_turns"
+              ? { title: "Claude Code llegó al máximo de pasos permitidos", hint: "La tarea era muy larga para un solo turno: divídela o vuelve a lanzarla para continuar." }
+              : explainCliFailure("claude", undefined, raw);
           out.push({
             type: "AGENT_ERROR",
-            title: "Claude Code terminó con error",
-            detail: clip(String(o.result ?? o.subtype ?? "error"), 2000),
+            title: ex.title,
+            detail: explainedDetail(ex, undefined, raw),
             status: "error",
-            metadata: meta,
+            metadata: { ...meta, hint: ex.hint },
             finalText: this.finalText,
           });
         } else {
@@ -162,10 +168,11 @@ export class ClaudeStreamParser {
     const status = isError ? "error" : "success";
     if (!t) return [];
     if (isError && /haven't granted|permission|not allowed|denied|requires approval/i.test(text)) {
-      const label = `Sin permiso para ${t.name === "Bash" ? firstLine(String(t.input.command ?? ""), 50) : t.name} (modo lectura)`;
+      const what = t.name === "Bash" ? `\`${firstLine(String(t.input.command ?? ""), 50)}\`` : t.name;
+      const label = `No tengo permiso para ${t.name === "Bash" ? "ejecutar" : "usar"} ${what} en esta tarea (solo lectura)`;
       const out: ExecutorEvent[] = [{ type: "AGENT_STATUS", title: label, tool: t.name, command: t.input.command ?? null, status: "warning" }];
       // Cierra el comando en la terminal sin reportarlo como prueba fallida.
-      if (t.kind === "test" || t.kind === "command") out.push({ type: "COMMAND_FINISHED", title: "Denegado por permisos", command: String(t.input.command ?? ""), detail: clip(text, 800), status: "warning", metadata: { denied: true } });
+      if (t.kind === "test" || t.kind === "command") out.push({ type: "COMMAND_FINISHED", title: "Bloqueado: la tarea es de solo lectura", command: String(t.input.command ?? ""), detail: clip(text, 800), status: "warning", metadata: { denied: true } });
       return out;
     }
     const file = rel(t.input.file_path ?? t.input.path, this.cwd);
@@ -174,19 +181,19 @@ export class ClaudeStreamParser {
         return isError ? [{ type: "AGENT_STATUS", title: `No se pudo leer ${base(file)}`, detail: clip(text, 600), status: "warning" }] : [];
       case "search": {
         const n = text.split(/\r?\n/).filter(Boolean).length;
-        return [{ type: "SEARCH_FINISHED", title: isError ? "Búsqueda sin resultado" : `${n} coincidencias`, tool: t.name, detail: clip(text, 1500), status }];
+        return [{ type: "SEARCH_FINISHED", title: isError ? "La búsqueda no funcionó" : n ? `Encontró ${n} coincidencia${n === 1 ? "" : "s"}` : "Sin coincidencias", tool: t.name, detail: clip(text, 1500), status }];
       }
       case "edit":
         return [
           isError
-            ? { type: "AGENT_STATUS", title: `Edición rechazada en ${base(file)}`, file, detail: clip(text, 800), status: "warning" }
+            ? { type: "AGENT_STATUS", title: `No se pudo editar ${base(file)}`, file, detail: clip(text, 800), status: "warning" }
             : { type: "FILE_CHANGED", title: `Modificó ${base(file)}`, file, tool: t.name, status: "success" },
         ];
       case "test": {
         const cmd = String(t.input.command ?? "");
         return [
           { type: "TEST_OUTPUT", title: firstLine(summarizeOutput(text), 120) || "salida", command: cmd, detail: clip(text, 12000), status },
-          { type: "TEST_FINISHED", title: isError ? "Pruebas con fallos" : "Pruebas OK", command: cmd, status, detail: summarizeOutput(text) },
+          { type: "TEST_FINISHED", title: isError ? "Algunas pruebas fallaron" : "Pruebas OK", command: cmd, status, detail: summarizeOutput(text) },
         ];
       }
       case "command": {

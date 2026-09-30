@@ -1,4 +1,5 @@
 import type { ExecutorEvent } from "../AgentExecutor";
+import { commandExitReason, explainCliFailure, explainedDetail } from "../humanize";
 import { base, classifyCommand, clip, firstLine, rel, summarizeOutput, unwrapShell } from "./common";
 
 /**
@@ -58,10 +59,10 @@ export class CodexJsonParser {
         ];
       case "turn.failed":
         this.failed = true;
-        return [{ type: "AGENT_ERROR", title: "Codex falló", detail: String(o.error?.message ?? JSON.stringify(o.error ?? {})), status: "error", finalText: this.lastAgentMessage }];
+        return [codexError(String(o.error?.message ?? JSON.stringify(o.error ?? {})), this.lastAgentMessage)];
       case "error":
         this.failed = true;
-        return [{ type: "AGENT_ERROR", title: "Error de Codex", detail: String(o.message ?? line(o)), status: "error" }];
+        return [codexError(String(o.message ?? line(o)))];
       default:
         return [];
     }
@@ -126,7 +127,7 @@ export class CodexJsonParser {
         return [{ type: "AGENT_STATUS", title: cur ? firstLine(cur.text, 80) : "Plan de trabajo completado", status: "info", metadata: { todos: items } }];
       }
       case "error":
-        return [{ type: "AGENT_STATUS", title: "Aviso de Codex", detail: String(item.message ?? ""), status: "warning" }];
+        return [{ type: "AGENT_STATUS", title: `Aviso: ${firstLine(String(item.message ?? ""), 90) || "Codex reportó una advertencia"}`, detail: String(item.message ?? ""), status: "warning" }];
       default:
         return [];
     }
@@ -151,16 +152,16 @@ export class CodexJsonParser {
     if (k.kind === "test" || k.kind === "build")
       return [
         { type: "TEST_OUTPUT", title: firstLine(summarizeOutput(output), 120) || "salida", command: cmd, detail: clip(output, 12000), status, metadata: meta },
-        { type: "TEST_FINISHED", title: exit === 0 ? "Pruebas OK" : `Pruebas fallaron (exit ${exit})`, command: cmd, status, detail: summarizeOutput(output), metadata: meta },
+        { type: "TEST_FINISHED", title: exit === 0 ? "Pruebas OK" : exit === 1 ? "Algunas pruebas fallaron" : `Las pruebas no corrieron: ${commandExitReason(exit)}`, command: cmd, status, detail: summarizeOutput(output), metadata: meta },
       ];
-    if (k.kind === "read") return exit === 0 ? [] : [{ type: "AGENT_STATUS", title: "Lectura fallida", command: cmd, detail: clip(output, 600), status: "warning" }];
+    if (k.kind === "read") return exit === 0 ? [] : [{ type: "AGENT_STATUS", title: `No se pudo leer ${base(classifyCommand(cmd).file) || "el archivo"}`, command: cmd, detail: clip(output, 600), status: "warning" }];
     if (k.kind === "search") {
       const n = output.split(/\r?\n/).filter(Boolean).length;
-      return [{ type: "SEARCH_FINISHED", title: `${n} resultados`, command: cmd, detail: clip(output, 1500), status: "success", metadata: meta }];
+      return [{ type: "SEARCH_FINISHED", title: n ? `Encontró ${n} coincidencia${n === 1 ? "" : "s"}` : "Sin coincidencias", command: cmd, detail: clip(output, 1500), status: "success", metadata: meta }];
     }
     return [
       { type: "COMMAND_OUTPUT", title: firstLine(output, 120) || "(sin salida)", command: cmd, detail: clip(output, 12000), status, metadata: meta },
-      { type: "COMMAND_FINISHED", title: `${exit === 0 ? "OK" : `exit ${exit}`}: ${firstLine(cmd, 60)}`, command: cmd, status, metadata: meta },
+      { type: "COMMAND_FINISHED", title: exit === 0 ? `OK: ${firstLine(cmd, 60)}` : `Falló (${commandExitReason(exit)}): ${firstLine(cmd, 50)}`, command: cmd, status, metadata: meta },
     ];
   }
 
@@ -186,7 +187,7 @@ export class CodexJsonParser {
         return files.map((f) => ({ type: "TOOL_STARTED", title: `Editando ${base(f)}`, file: rel(f, this.cwd), tool: "apply_patch", status: "running", metadata: { edit: true } }) as ExecutorEvent);
       }
       case "patch_apply_end":
-        return [{ type: m.success ? "FILE_CHANGED" : "AGENT_STATUS", title: m.success ? "Cambios aplicados" : "Patch rechazado", detail: clip(String(m.stdout ?? m.stderr ?? ""), 800), status: m.success ? "success" : "warning" }];
+        return [{ type: m.success ? "FILE_CHANGED" : "AGENT_STATUS", title: m.success ? "Cambios aplicados" : "No se pudieron aplicar los cambios", detail: clip(String(m.stdout ?? m.stderr ?? ""), 800), status: m.success ? "success" : "warning" }];
       case "mcp_tool_call_begin":
         return [{ type: "TOOL_STARTED", title: `Usando ${m.invocation?.tool ?? "herramienta"}`, tool: m.invocation?.tool, status: "running" }];
       case "mcp_tool_call_end":
@@ -196,7 +197,7 @@ export class CodexJsonParser {
         return [{ type: "AGENT_FINISHED", title: "Tarea completada", detail: clip(this.finalText, 6000), status: "success", finalText: this.finalText }];
       case "error":
         this.failed = true;
-        return [{ type: "AGENT_ERROR", title: "Error de Codex", detail: String(m.message ?? ""), status: "error" }];
+        return [codexError(String(m.message ?? ""))];
       default:
         return []; // agent_reasoning*, token_count, etc.
     }
@@ -215,4 +216,10 @@ function line(o: unknown): string {
   } catch {
     return String(o);
   }
+}
+
+/** Error reportado por Codex en su propio stream, explicado en lenguaje claro. */
+function codexError(message: string, finalText?: string): ExecutorEvent {
+  const ex = explainCliFailure("codex", undefined, message);
+  return { type: "AGENT_ERROR", title: ex.title, detail: explainedDetail(ex, undefined, message), status: "error", metadata: { hint: ex.hint }, ...(finalText !== undefined ? { finalText } : {}) };
 }
