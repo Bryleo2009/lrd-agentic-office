@@ -282,3 +282,44 @@ test("'valida el CI #502 y corrígelo': parte de la rama donde corrió ese run, 
   const mergeBase = git(["merge-base", `refs/heads/${m.branch}`, "refs/heads/feature/venta-salon"], front);
   assert.equal(mergeBase, git(["rev-parse", "refs/heads/feature/venta-salon"], front));
 });
+
+test("'en la misma rama': la corrección va directo a la rama del run; y 'hazlo directo en esa rama' por chat mueve una entrega agentic/", { timeout: 180_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const { eventBus } = await import("../src/server/events/AgentEventBus");
+  const wait = async (id: string) => {
+    let m = repo.getMission(id)!;
+    for (let i = 0; i < 400 && !["done", "failed"].includes(m.status); i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      m = repo.getMission(id)!;
+    }
+    return m;
+  };
+  process.env.FAKE_GH_RUN_BRANCH = "feature/venta-salon";
+
+  // 1) Pedido directo desde el inicio.
+  const a = await wait((await orchestrator.createMission({ prompt: "Corrige el CI Frontend Quality #502 en la misma rama", repositoryId: "lrd-front", engine: "codex" })).id);
+  assert.equal(a.status, "done", a.error ?? "");
+  assert.equal(a.branch, "feature/venta-salon", "entrega directa en la rama del run");
+  assert.equal(git(["rev-parse", "refs/heads/feature/venta-salon"], front), a.commitSha);
+  assert.doesNotMatch(git(["branch", "--list", `agentic/*${a.id}*`], front), /agentic/, "no se creó rama agentic/");
+
+  // 2) Entregada en agentic/… y luego se pide por chat pasarla directo a la rama.
+  const b = await wait((await orchestrator.createMission({ prompt: "Corrige el CI Frontend Quality #502", repositoryId: "lrd-front", engine: "codex" })).id);
+  assert.equal(b.status, "done", b.error ?? "");
+  assert.match(b.branch ?? "", /^agentic\//);
+  const notes: string[] = [];
+  const onMsg = (msg: { kind: string; event?: { type: string; agentId: string | null; provider: string; detail: string | null } }) => {
+    const e = msg.event;
+    if (msg.kind === "event" && e && e.type === "AGENT_MESSAGE" && e.agentId === "atlas" && e.provider === "system") notes.push(e.detail ?? "");
+  };
+  eventBus.on("message", onMsg);
+  await orchestrator.chat("atlas", "pero te dije que hagas los cambios directos en esa rama", b.id, "codex");
+  for (let i = 0; i < 300 && !notes.length; i++) await new Promise((r) => setTimeout(r, 200));
+  eventBus.off("message", onMsg);
+  delete process.env.FAKE_GH_RUN_BRANCH;
+  assert.match(notes[0] ?? "", /ya están directo en `feature\/venta-salon`.*GitHub Actions: ✅/s);
+  const after = repo.getMission(b.id)!;
+  assert.equal(after.branch, "feature/venta-salon");
+  assert.equal(git(["rev-parse", "refs/heads/feature/venta-salon"], front), git(["rev-parse", "HEAD"], after.worktree!));
+});

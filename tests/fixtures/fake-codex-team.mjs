@@ -49,7 +49,7 @@ process.stdin.on("end", () => {
     const t0 = Date.now();
     log({ kind: "agent", who });
     setTimeout(() => {
-      fs.writeFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who}\n`);
+      fs.appendFileSync(path.join(process.cwd(), `cambio-${who}.txt`), `hecho por ${who} ${Date.now()}\n`);
       fs.appendFileSync(process.env.FAKE_TIMELINE, JSON.stringify({ who, start: t0, end: Date.now(), cwd: process.cwd() }) + "\n");
       say(`Listo en ${who}.\nRESUMEN: cambio aplicado en ${who}`);
     }, Number(process.env.FAKE_AGENT_MS ?? 1500));

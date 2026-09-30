@@ -162,6 +162,38 @@ export function asksChange(prompt: string): boolean {
   return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|\bcambio\b|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona|\bajusta|\bquita|reemplaza|renombra|\bedita|\baplica|\bpublica(?!ndo)|reintenta/.test(norm(prompt));
 }
 
+const R = "(?:rama|branch)";
+/** Frases que piden NO crear rama: ya son una negación, así que cuentan directamente. */
+const NO_NEW_BRANCH = [
+  new RegExp(`\\b(?:sin|no)\\s+(?:crear|crees|abrir|abras|generar|generes|hacer|hagas|nueva|otra)\\b[^.\\n]{0,20}\\b${R}\\b`),
+  new RegExp(`\\b(?:sin|no)\\s+(?:una\\s+|otra\\s+)?${R}\\s+(?:nueva|aparte|adicional|distinta|diferente)\\b`),
+  new RegExp(`\\b(?:don'?t|do not|without)\\s+(?:creating|create|opening|open|a|any|new)\\b[^.\\n]{0,20}\\bbranch\\b`),
+];
+/** Frases positivas de "en la misma rama"; se descartan si van dentro de una prohibición. */
+const SAME_BRANCH = [
+  new RegExp(`\\bmism[ao]\\s+${R}\\b`),
+  new RegExp(`\\b(?:en|sobre|a|hacia)\\s+(?:esa|dicha|esta|su|la\\s+propia|su\\s+propia)\\s+${R}\\b`),
+  new RegExp(`\\b(?:directo|directos|directa|directas|directamente)\\b[^.\\n]{0,25}\\b${R}\\b`),
+  new RegExp(`\\b${R}\\s+(?:original|actual|existente|de\\s+origen|que\\s+falla|del\\s+(?:ci|run|pr|pull\\s+request|error))\\b`),
+  new RegExp(`\\b(?:commit\\w*|push\\w*|sub\\w*|empuj\\w*|publica\\w*|integra\\w*|merge\\w*|aplica\\w*)\\b[^.\\n]{0,25}\\b(?:en|a|sobre)\\s+(?:la\\s+)?${R}\\s+base\\b`),
+  /\bsame branch\b/,
+  /\bdirectly (?:on|to|in|into) (?:the |that |this )?(?:\w+ )?branch\b/,
+];
+
+/** ¿La misión (ya normalizada) pide entregar directo en la rama base, sin rama nueva? */
+function wantsDirectToBase(p: string): boolean {
+  if (NO_NEW_BRANCH.some((re) => re.test(p))) return true;
+  for (const re of SAME_BRANCH) {
+    const g = new RegExp(re.source, "g");
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(p))) {
+      const before = p.slice(Math.max(0, m.index - 30), m.index);
+      if (!/(\bno\b|\bnunca\b|\bni\b|\bnot\b|\bnever\b|don'?t)[^.\n]{0,25}$/.test(before)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Preferencias de entrega escritas en la misión. Por defecto: rama nueva agentic/… publicada.
  * - "no publiques", "solo local", "sin push" → la rama queda solo local.
@@ -170,7 +202,7 @@ export function asksChange(prompt: string): boolean {
 export function deliveryPrefs(prompt: string): { publish: boolean; directToBase: boolean } {
   const p = norm(prompt);
   const publish = !/no (la )?publiques|sin publicar|no (hagas )?push|sin push|no (la )?subas|solo local/.test(p);
-  const directToBase = /sin crear (una |ninguna )?rama|no crees (una |ninguna )?rama|directo en la rama|directamente (en|sobre) la rama/.test(p);
+  const directToBase = wantsDirectToBase(p);
   return { publish, directToBase };
 }
 

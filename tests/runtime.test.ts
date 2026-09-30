@@ -327,3 +327,30 @@ test("misión sobre un run de CI o una rama existente: detecta cuál", async () 
   assert.deepEqual(mentionedBranches("Corrige el lint en la rama `feature/venta-salon-configuracion-mesas`"), ["feature/venta-salon-configuracion-mesas"]);
   assert.deepEqual(mentionedBranches("No toques feature/vieja; crea agentic/feature/nueva"), []);
 });
+
+test("'en la misma rama' / 'directos en esa rama' = entregar directo en la rama base", async () => {
+  const { deliveryPrefs } = await import("../src/server/missions/MissionPlanner");
+  assert.equal(deliveryPrefs("Corrige el CI Frontend Quality #502 en la misma rama").directToBase, true);
+  assert.equal(deliveryPrefs("pero te dije que hagas los cambios directos en esa rama").directToBase, true);
+  assert.equal(deliveryPrefs("Corrige esto directamente en la rama base").directToBase, true);
+  assert.equal(deliveryPrefs("Crea una nueva rama a partir de release/fase3.1").directToBase, false);
+  assert.equal(deliveryPrefs("Trabaja en la rama feature/x y crea agentic/feature/y").directToBase, false);
+  // Frases equivalentes
+  for (const yes of [
+    "arreglalo en la misma branch",
+    "súbelo a esa rama",
+    "no crees otra rama, hazlo ahí",
+    "sin una rama nueva",
+    "no abras una rama aparte",
+    "haz commit en la rama base",
+    "corrígelo en la rama que falla",
+    "aplica el fix en la rama del CI",
+    "push directo a la rama",
+    "fix it on the same branch",
+    "commit directly to the feature branch",
+    "don't create a new branch",
+  ])
+    assert.equal(deliveryPrefs(yes).directToBase, true, yes);
+  for (const no of ["no lo hagas en la misma rama", "no uses esa rama, crea agentic/feature/x", "trabaja en la rama feature/x", "revisa el CI de la rama feature/x"])
+    assert.equal(deliveryPrefs(no).directToBase, false, no);
+});

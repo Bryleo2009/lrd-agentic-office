@@ -444,7 +444,7 @@ export class AgentOrchestrator {
       const onBase = await Promise.all(r.failed.map((f) => github.lastConclusion(w.cfg.github, w.base, f.workflowName)));
       if (onBase.every((c) => c && c !== "success"))
         return finish("unrelated", `${r.detail}. El mismo workflow también está en rojo en ${w.base}: no lo causan los cambios de esta misión.`, "done", "warning");
-      if (info.attempts >= config.ciFixIterations || res.branch === w.base)
+      if (info.attempts >= config.ciFixIterations)
         return finish("failure", `${r.detail}${info.attempts ? ` (tras ${info.attempts} corrección(es))` : ""}`, "failed", "error");
 
       info.attempts++;
@@ -481,10 +481,11 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       const text = this.absorb(id, writer, fix.text, w.cfg.id);
       if (/NO_RELACIONADO/i.test(text)) return finish("unrelated", `${r.detail}. ${getAgent(writer).name}: ${firstLine(text.replace(/.*NO_RELACIONADO:\s*/is, ""), 200)}`, "done", "warning");
       if (!(await gitManager.status(w.wt)).trim()) return finish("failure", `${r.detail}. ${getAgent(writer).name} no encontró qué cambiar.`, "failed", "error");
-      const newSha = await gitManager.commit(w.wt, `fix(ci): ${firstLine(r.detail, 60)}\n\nMisión ${id} · corrección tras GitHub Actions (intento ${info.attempts})`);
+      const directCi = res.branch === w.base;
+      const newSha = await gitManager.commit(w.wt, `fix(ci): ${firstLine(r.detail, 60)}\n\nMisión ${id} · corrección tras GitHub Actions (intento ${info.attempts})`, directCi ? w.base : undefined);
       if (!newSha) return finish("failure", `${r.detail}. No se pudo crear el commit de corrección.`, "failed", "error");
       this.emit(id, writer, { provider: "git", sessionId: null, type: "GIT_COMMIT", title: `Commit ${newSha.slice(0, 7)}${tag} (corrección de CI)`, status: "success", metadata: { sha: newSha, branch: res.branch, repositoryId: w.cfg.id } });
-      await gitManager.push(w.wt);
+      await gitManager.push(w.wt, directCi ? w.base : undefined);
       repo.insertDelivery({ missionId: id, kind: "push", ref: `${w.cfg.id}:${res.branch}` });
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_PUSH", title: `Corrección publicada${tag}: ${res.branch}`, detail: "Esperando GitHub Actions de nuevo", status: "success", metadata: { branch: res.branch, repositoryId: w.cfg.id } });
       sha = newSha;
@@ -546,10 +547,12 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       return out;
     }
     const tag = multi ? ` (${w.cfg.name})` : "";
-    const direct = !onBranch && prefs.directToBase && !isProtected(w.base);
+    // Directo en la rama base: pedido en la misión, o la misión ya se pasó a su rama (mission.branch === base).
+    const promoted = (multi ? mission.repos.find((x) => x.repositoryId === w.cfg.id)?.branch : mission.branch) === w.base;
+    const direct = (promoted || (!onBranch && prefs.directToBase)) && !isProtected(w.base);
     if (prefs.directToBase && !direct && !onBranch)
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${w.base} está protegida${tag}: se usa una rama nueva`, status: "warning" });
-    const branch = onBranch ? current : direct ? w.base : await this.branchName(mission, w);
+    const branch = direct ? w.base : onBranch ? current : await this.branchName(mission, w);
     if (!direct && !onBranch) {
       await gitManager.createBranch(w.wt, branch);
       repo.insertBranch({ repositoryId: w.cfg.id, missionId: id, name: branch, base: w.base, worktree: w.wt });
@@ -1265,6 +1268,18 @@ Termina con "RESUMEN:" y una frase corta.`;
     // editar en la carpeta de esa misión y la oficina hace commit en su misma rama, la publica y espera CI.
     const change = mission && mission.repositoryId !== NO_REPO && asksChange(message) ? this.chatChangeTarget(mission, agentId) : null;
     if (change && this.active.has(mission!.id)) throw new MissionError("La misión todavía está en curso: espera a que termine para pedir ajustes por chat.", 409);
+    // "Hazlo directo en esa rama" sobre una misión ya entregada en una rama agentic/…: la oficina publica esos
+    // commits en la rama base (si no está protegida) y la entrega pasa a ser esa rama. Sin despertar al agente.
+    if (mission && mission.repositoryId !== NO_REPO && !this.active.has(mission.id) && deliveryPrefs(message).directToBase && this.agenticDeliveries(mission).length) {
+      eventBus.publish({ missionId: mission.id, agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
+      void this.promoteToBase(mission, agentId)
+        .catch((e) => {
+          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
+          this.chatNote(mission.id, agentId, g ? `No pude pasar los cambios a la rama base: ${g.title}.\n\n${g.hint}` : `No pude pasar los cambios a la rama base: ${(e as Error).message}`);
+        })
+        .finally(() => eventBus.broadcast({ kind: "chat", agentId, missionId: mission.id, delta: "", done: true }));
+      return;
+    }
     // "publica los cambios" / "reintenta": solo publicar lo que ya está hecho, sin despertar al agente.
     if (change && message.length < 80 && /^\s*(por favor\s+)?(publica|vuelve a publicar|reintenta)/i.test(message)) {
       eventBus.publish({ missionId: mission!.id, agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
@@ -1287,7 +1302,8 @@ Termina con "RESUMEN:" y una frase corta.`;
     const changeNote = change
       ? `El usuario te pide un CAMBIO sobre la misión ${mission!.id}: puedes modificar archivos en tu carpeta (${change.cfg.name}, ${change.wt}). Haz el cambio mínimo y correcto${change.cfg.checkCommand ? ` y verifica con \`${change.cfg.checkCommand}\` o la parte relevante` : ""}. No hagas git commit/push ni cambies de rama: al terminar, la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions.`
       : "No modifiques archivos: si el usuario pide un cambio de código, dile que lo pida con un verbo claro (p. ej. \"cambia…\", \"corrige…\") o que lance una misión.";
-    let prompt = change ? `${changeNote}\n\nMensaje del usuario: ${message}` : message;
+    const state = mission ? this.missionState(mission) : "";
+    let prompt = change ? `${state}${changeNote}\n\nMensaje del usuario: ${message}` : `${state}${message}`;
     if (!entry.session.hasTurn) {
       const a = getAgent(agentId);
       prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. ${changeNote}\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\nMensaje del usuario: ${message}`;
@@ -1343,6 +1359,67 @@ Termina con "RESUMEN:" y una frase corta.`;
           if (repo.getMission(mission!.id)?.status === "committing") this.setMission(mission!.id, { status: "done" });
         });
     })();
+  }
+
+  /** Entregas de la misión que están en una rama agentic/… (candidatas a pasarse a la rama base). */
+  private agenticDeliveries(m: Mission): { repositoryId: string; branch: string; base: string; worktree: string | null }[] {
+    if (m.repos.length) return m.repos.filter((r) => r.branch?.startsWith("agentic/")).map((r) => ({ repositoryId: r.repositoryId, branch: r.branch!, base: r.baseBranch, worktree: r.worktree }));
+    return m.branch?.startsWith("agentic/") ? [{ repositoryId: m.repositoryId, branch: m.branch, base: m.baseBranch, worktree: m.worktree }] : [];
+  }
+
+  /** Estado real de la misión para el chat (evita que el agente responda con un contexto viejo). */
+  private missionState(m: Mission): string {
+    const deliveries = m.repos.length
+      ? m.repos.filter((r) => r.branch).map((r) => `${r.repositoryId}: commit ${r.commitSha?.slice(0, 7) ?? "—"} en \`${r.branch}\`${r.pushed ? " (publicado)" : " (sin publicar)"} desde ${r.baseBranch}`)
+      : m.branch
+        ? [`commit ${m.commitSha?.slice(0, 7) ?? "—"} en \`${m.branch}\`${m.pushed ? " (publicado)" : " (sin publicar)"} desde ${m.baseBranch}`]
+        : [];
+    const ci = (m.ci ?? []).map((c) => `${c.repositoryId}: ${c.state}`).join(", ");
+    return `[Estado REAL de la misión ${m.id} (${m.status}) según la oficina: ${deliveries.length ? deliveries.join("; ") : "sin entrega de código"}${ci ? `; GitHub Actions: ${ci}` : ""}. Git (commit, push, ramas) lo hace la oficina: si el usuario pide pasar los cambios directo a la rama base o reintentar la publicación, la oficina lo ejecuta. No inventes el estado ni atribuyas la decisión a instrucciones de planificación.]\n\n`;
+  }
+
+  /** Pasa los commits de la misión (rama agentic/…) a su rama base, publica y espera GitHub Actions. */
+  private async promoteToBase(m: Mission, agentId: AgentId): Promise<void> {
+    const multi = m.repos.length > 1;
+    const lines: string[] = [];
+    const rt = newRuntime();
+    this.active.set(m.id, rt);
+    try {
+      for (const d of this.agenticDeliveries(m)) {
+        const cfg = this.repoConfig(d.repositoryId);
+        if (isProtected(d.base)) {
+          lines.push(`${multi ? `${cfg.name}: ` : ""}\`${d.base}\` está protegida, así que no publico directo ahí; los cambios siguen en \`${d.branch}\` para abrir un PR.`);
+          continue;
+        }
+        if (!d.worktree || !fs.existsSync(d.worktree)) {
+          lines.push(`${multi ? `${cfg.name}: ` : ""}la carpeta de la misión ya no existe; no puedo mover los cambios.`);
+          continue;
+        }
+        const w: WorkRepo = { cfg, base: d.base, wt: d.worktree };
+        rt.repos.set(cfg.id, w);
+        this.setMission(m.id, { status: "committing" });
+        await gitManager.push(w.wt, d.base);
+        const sha = await gitManager.headSha(w.wt);
+        this.emit(m.id, "atlas", { provider: "git", sessionId: null, type: "GIT_PUSH", title: `Cambios publicados directo en ${d.base}${multi ? ` (${cfg.name})` : ""}`, detail: `commit ${sha.slice(0, 7)} · antes en ${d.branch}`, status: "success", metadata: { branch: d.base, repositoryId: cfg.id } });
+        repo.insertDelivery({ missionId: m.id, kind: "push", ref: `${cfg.id}:${d.base}` });
+        const res: MissionRepo = { repositoryId: cfg.id, baseBranch: d.base, worktree: d.worktree, branch: d.base, commitSha: sha, pushed: true, prUrl: null };
+        if (multi) m.repos = m.repos.map((r) => (r.repositoryId === cfg.id ? { ...r, branch: d.base, commitSha: sha, pushed: true } : r));
+        this.setMission(m.id, multi ? { repos: m.repos } : { branch: d.base, commitSha: sha, pushed: true });
+        let ciText = "";
+        if (config.ciWaitEnabled) {
+          this.setMission(m.id, { status: "ci" });
+          const ci = await this.ciLoop(m.id, m, w, res, repo.getMission(m.id)!.steps, rt, multi);
+          ciText = ci.state === "success" ? " GitHub Actions: ✅ en verde." : ` GitHub Actions: ${ci.state === "failure" || ci.state === "timeout" ? "❌" : "⚠️"} ${ci.detail}`;
+          if (!multi) this.setMission(m.id, { commitSha: res.commitSha });
+        }
+        lines.push(`${multi ? `${cfg.name}: ` : ""}listo, los cambios (commit \`${(res.commitSha ?? sha).slice(0, 7)}\`) ya están directo en \`${d.base}\`. La rama \`${d.branch}\` queda como respaldo.${ciText}`);
+      }
+    } finally {
+      this.active.delete(m.id);
+      const cur = repo.getMission(m.id);
+      if (cur && (cur.status === "committing" || cur.status === "ci")) this.setMission(m.id, { status: "done" });
+    }
+    this.chatNote(m.id, agentId, lines.join("\n") || "No había entregas en ramas agentic/… que pasar a la rama base.");
   }
 
   /** Repo y carpeta donde un agente puede aplicar por chat un cambio sobre una misión terminada. */

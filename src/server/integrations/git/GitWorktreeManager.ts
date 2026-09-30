@@ -168,14 +168,11 @@ export class GitWorktreeManager {
   async push(wt: string, targetBranch?: string): Promise<string> {
     const branch = targetBranch ?? (await this.currentBranch(wt));
     assertNotProtected(branch);
-    if (targetBranch) {
-      // Commit directo sobre la rama base (pedido explícitamente): fast-forward, nunca --force.
-      await git(["push", "origin", `HEAD:refs/heads/${branch}`], wt, 5 * 60_000);
-      return branch;
-    }
-    if (!branch.startsWith("agentic/")) throw new GitError(`Push bloqueado: rama inesperada ${branch}`, "");
+    if (!targetBranch && !branch.startsWith("agentic/")) throw new GitError(`Push bloqueado: rama inesperada ${branch}`, "");
+    // Directo en la rama base (pedido explícitamente): HEAD → base, solo fast-forward; nunca --force.
+    const pushArgs = targetBranch ? ["push", "origin", `HEAD:refs/heads/${branch}`] : ["push", "-u", "origin", `${branch}:${branch}`];
     try {
-      await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
+      await git(pushArgs, wt, 5 * 60_000);
     } catch (e) {
       const out = e instanceof GitError ? `${e.message}\n${e.output}` : String(e);
       if (!/non-fast-forward|fetch first|\[rejected\]|updates were rejected/i.test(out)) throw e;
@@ -187,7 +184,7 @@ export class GitWorktreeManager {
         await run("git", ["rebase", "--abort"], { cwd: wt, timeoutMs: 60_000 });
         throw new GitError(`No se pudo publicar ${branch}: la rama remota tiene cambios que chocan con los de la misión (conflicto al integrarlos)`, tail(`${r.stderr}\n${r.stdout}`, 2000));
       }
-      await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
+      await git(pushArgs, wt, 5 * 60_000);
     }
     return branch;
   }
