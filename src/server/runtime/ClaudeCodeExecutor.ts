@@ -18,6 +18,12 @@ const READ_ONLY_TOOLS = [
   "Bash(git diff:*)",
   "Bash(git status:*)",
   "Bash(git show:*)",
+  "Bash(git grep:*)",
+  "Bash(git ls-tree:*)",
+  "Bash(git ls-files:*)",
+  "Bash(git blame:*)",
+  "Bash(git cat-file:*)",
+  "Bash(git rev-parse:*)",
   "Bash(ls:*)",
   "Bash(cat:*)",
   "Bash(head:*)",
@@ -34,7 +40,25 @@ const READ_ONLY_TOOLS = [
   "Bash(php artisan test:*)",
   "Bash(vendor/bin/phpunit:*)",
   "Bash(composer validate:*)",
+  // Diagnóstico de entorno y sintaxis (no modifican archivos)
+  "Bash(php -v)",
+  "Bash(php --version)",
+  "Bash(php -m)",
+  "Bash(php -l:*)",
+  "Bash(php artisan --version)",
+  "Bash(composer --version)",
+  "Bash(vendor/bin/pint --test:*)",
+  // CI de GitHub en solo lectura
+  "Bash(gh run list:*)",
+  "Bash(gh run view:*)",
+  "Bash(gh pr view:*)",
+  "Bash(gh pr checks:*)",
 ];
+const READ_ONLY_GUARD =
+  "Estás en MODO LECTURA: no edites archivos. Ejecuta comandos simples, uno por llamada: " +
+  "sin pipes (|), sin `cd … &&`, sin `;` ni redirecciones, porque cada segmento debe estar permitido. " +
+  "Para ver otra rama usa `git show <rama>:<ruta>` o `git grep <patrón> <rama> -- <ruta>` (no hagas checkout). " +
+  "Si un comando es denegado, no lo reintentes con variantes: repórtalo y sigue con lo que sí puedes verificar.";
 const WRITE_TOOLS = ["Read", "Grep", "Glob", "LS", "TodoWrite", "Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"];
 const ALWAYS_DENY = [
   "Bash(git push:*)",
@@ -45,7 +69,36 @@ const ALWAYS_DENY = [
   "Bash(git rebase:*)",
   "Bash(git merge:*)",
   "Bash(git worktree:*)",
-  "Bash(gh:*)",
+  // gh: solo consultas de CI; todo lo que publica o modifica queda bloqueado.
+  "Bash(gh api:*)",
+  "Bash(gh auth:*)",
+  "Bash(gh pr create:*)",
+  "Bash(gh pr merge:*)",
+  "Bash(gh pr close:*)",
+  "Bash(gh pr edit:*)",
+  "Bash(gh pr comment:*)",
+  "Bash(gh pr review:*)",
+  "Bash(gh pr checkout:*)",
+  "Bash(gh issue:*)",
+  "Bash(gh release:*)",
+  "Bash(gh repo:*)",
+  "Bash(gh secret:*)",
+  "Bash(gh variable:*)",
+  "Bash(gh workflow:*)",
+  "Bash(gh run rerun:*)",
+  "Bash(gh run cancel:*)",
+  "Bash(gh run delete:*)",
+  "Bash(gh run download:*)",
+  "Bash(gh gist:*)",
+  "Bash(gh label:*)",
+  "Bash(gh project:*)",
+  "Bash(gh cache:*)",
+  "Bash(gh codespace:*)",
+  "Bash(gh extension:*)",
+  "Bash(gh alias:*)",
+  "Bash(gh config:*)",
+  "Bash(gh ssh-key:*)",
+  "Bash(gh gpg-key:*)",
 ];
 const READ_ONLY_DENY = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
@@ -176,7 +229,8 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
     const guard =
       "Trabajas dentro de un git worktree aislado gestionado por LRD Agentic Office. " +
       "No hagas git commit, push, checkout ni crees ramas: el orquestador controla Git. No pidas confirmaciones: actúa y resume.";
-    return { args: this.args(session, guard), stdin: task.prompt, parser: new ClaudeStreamParser(session.config.cwd), label: "claude-task" };
+    const ro = session.config.permission === "read-only";
+    return { args: this.args(session, ro ? `${guard} ${READ_ONLY_GUARD}` : guard), stdin: task.prompt, parser: new ClaudeStreamParser(session.config.cwd), label: "claude-task" };
   }
 
   protected buildMessage(session: AgentSession, message: string): Invocation {

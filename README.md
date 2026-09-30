@@ -107,7 +107,7 @@ Puedes fijar `qaCommands` (p. ej. `["npm run build"]`) o dejar que se autodetect
 
 - Nunca se almacenan contraseñas, cookies, tokens OAuth ni API keys. Sólo metadata de sesión.
 - Ramas protegidas (`main`, `release/fase2`, `release/fase3.1`): el orquestador bloquea commit/push sobre ellas.
-- Claude Code se lanza con `--disallowedTools` para `git push/commit/checkout/reset/rebase/merge` y `gh`.
+- Claude Code se lanza con `--disallowedTools` para `git push/commit/checkout/reset/rebase/merge` y los subcomandos de `gh` que publican o modifican (`gh api`, `gh pr create/merge/comment`, `gh issue`, `gh release`, …). En modo lectura solo se permiten consultas de CI (`gh run list/view`, `gh pr view/checks`).
 - Los agentes de investigación corren en modo sólo lectura (Codex `--sandbox read-only`, Claude sin herramientas de edición).
 - Nunca se muestra razonamiento interno: sólo acciones observables (archivos, comandos, resultados).
 - Si algo falla (CLI, git, build, tests…), el agente queda **BLOCKED** con el error real. No se inventa éxito.

@@ -161,3 +161,13 @@ test("parser: llamadas MCP se muestran como consultas de datos", () => {
   const e2 = x.parseLine(JSON.stringify({ type: "item.started", item: { id: "1", type: "mcp_tool_call", server: "prod", tool: "sql", status: "in_progress" } }));
   assert.equal((e2[0].metadata as any).mcp, true);
 });
+
+test("planner: una misión que pide corregir no se degrada a análisis aunque la IA diga 'analysis'", () => {
+  const ai = JSON.stringify({ deliverable: "analysis", steps: [{ id: "s1", agent: "diego", title: "Corregir CI", task: "x", dependsOn: [], writes: true }] });
+  const fix = parsePlan(ai, "Revisa el CI de fase3.1 y corrige los fallos");
+  assert.equal(fix?.deliverable, "code_change");
+  assert.equal(fix?.steps[0].writes, true);
+  const onlyReview = parsePlan(ai, "Revisa por qué falla el CI de fase3.1");
+  assert.equal(onlyReview?.deliverable, "analysis");
+  assert.equal(onlyReview?.steps[0].writes, false);
+});

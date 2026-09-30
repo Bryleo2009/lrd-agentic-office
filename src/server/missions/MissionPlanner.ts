@@ -66,11 +66,14 @@ export function inferArea(prompt: string, repo: RepositoryConfig | null): string
   return "general";
 }
 
+/** La misión pide explícitamente modificar código (corregir, implementar, …). */
+export function asksChange(prompt: string): boolean {
+  return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona/.test(norm(prompt));
+}
+
 export function isAnalysisOnly(prompt: string): boolean {
-  const p = norm(prompt);
-  const asksChange = /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|modifica|refactor|actualiza|prepara el pr|elimina/.test(p);
-  const asksAnalysis = /analiza|revisa|explica|dime|por que|porque|investiga|diagn|valida/.test(p);
-  return asksAnalysis && !asksChange;
+  const asksAnalysis = /analiza|revisa|explica|dime|por que|porque|investiga|diagn|valida/.test(norm(prompt));
+  return asksAnalysis && !asksChange(prompt);
 }
 
 export function mcpRules(servers: string[]): string {
@@ -107,6 +110,7 @@ Reglas del plan:
 - Entre 1 y 4 pasos. Usa solo agentes cuyo rol encaje con la misión.
 - Pasos de investigación: "writes": false. Pasos que modifican código: "writes": true.
 - Si la misión solo pide analizar/explicar, ningún paso debe tener "writes": true.
+- Si la misión pide corregir/arreglar/implementar, al menos un paso debe tener "writes": true (y "deliverable": "code_change").
 - Pasos independientes no deben depender entre sí (se ejecutan en paralelo).
 - "task" debe ser una instrucción concreta y autocontenida para ese agente.
 
@@ -135,7 +139,9 @@ export function parsePlan(text: string, prompt: string): MissionPlan | null {
 
 function validate(j: any, prompt: string): MissionPlan | null {
   if (!j || !Array.isArray(j.steps) || j.steps.length === 0) return null;
-  const analysis = j.deliverable === "analysis" || isAnalysisOnly(prompt);
+  // Si la misión pide corregir, el planificador no puede degradarla a "analysis":
+  // eso dejaba pasos como "Corregir …" en modo lectura sin poder editar nada.
+  const analysis = isAnalysisOnly(prompt) || (j.deliverable === "analysis" && !asksChange(prompt));
   const steps: PlannedStep[] = [];
   const ids = new Set<string>();
   for (const [i, s] of j.steps.slice(0, 6).entries()) {
