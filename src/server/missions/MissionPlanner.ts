@@ -48,19 +48,66 @@ export function isQuickLookup(prompt: string): boolean {
  * Elige el repositorio en modo Automático. Devuelve "none" si la misión es de datos/análisis sin código.
  * Siempre explica el motivo (se muestra en la oficina).
  */
-export function inferRepo(prompt: string, repos: RepositoryConfig[], mcpAvailable: boolean): { id: string; reason: string } {
-  const p = norm(prompt);
-  const enabled = repos.filter((r) => r.enabled);
-  for (const r of enabled) {
-    const names = [r.id, r.name, r.shortName, ...(r.keywords ?? [])].map((x) => norm(x)).filter((x) => x.length > 2);
-    const hit = names.find((n) => p.includes(n));
-    if (hit && !["back", "front"].includes(hit)) return { id: r.id, reason: `la misión menciona "${hit}"` };
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Frases que prohíben algo: "no tocar X", "no uses X", "sin modificar X", "excepto X"… */
+const NEGATION = /(\bno\b|\bnunca\b|\bsin\b|\bexcepto\b|\bni\b)[^.\n]{0,40}$/;
+
+/**
+ * Puntúa cuánto pide la misión un término (repo o rama): menciones explícitas suman, las que están
+ * dentro de una prohibición ("No tocar lrd-back", "No uses release/fase2") restan.
+ */
+function mentionScore(p: string, term: string, strong: RegExp): number {
+  const t = norm(term);
+  if (t.length < 3) return 0;
+  let score = 0;
+  const re = new RegExp(`(^|[^a-z0-9_/-])${escapeRe(t)}(?![a-z0-9_-])`, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(p))) {
+    const before = p.slice(Math.max(0, m.index - 60), m.index + m[1].length);
+    if (NEGATION.test(before)) score -= 5;
+    else score += strong.test(before) ? 4 : 1;
   }
+  return score;
+}
+
+/** Rama base pedida en el texto ("Parte desde release/fase3.1", "No uses release/fase2"), si es inequívoca. */
+export function inferBase(prompt: string, repo: RepositoryConfig): string | null {
+  const p = norm(prompt).replace(/`/g, " ");
+  const scored = repo.allowedBases
+    .map((b) => ({ b, s: mentionScore(p, b, /(desde|parte|partir|base|sobre|from|basad[ao])[^.\n]{0,40}$/) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s);
+  if (!scored.length || (scored[1] && scored[1].s === scored[0].s)) return null;
+  return scored[0].b;
+}
+
+/** Nombre de rama pedido explícitamente ("Crea una rama agentic/feature/xyz"). Debe empezar con agentic/. */
+export function requestedBranch(prompt: string): string | null {
+  const m = prompt.match(/\bagentic\/[A-Za-z0-9._\/-]*[A-Za-z0-9]/);
+  if (!m) return null;
+  const b = m[0].replace(/\/{2,}/g, "/");
+  return /^agentic\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(b) && !b.includes("..") ? b : null;
+}
+
+export function inferRepo(prompt: string, repos: RepositoryConfig[], mcpAvailable: boolean): { id: string; reason: string } {
+  const p = norm(prompt).replace(/`/g, " ");
+  const enabled = repos.filter((r) => r.enabled);
+  // Menciones explícitas (nombre, owner/repo de GitHub, palabras clave), descontando las prohibidas.
+  const strong = /(repositorio|repo|trabaja|sobre|en el|modifica|cambia|en)[^.\n]{0,30}$/;
+  const scored = enabled
+    .map((r) => {
+      const names = [...new Set([r.github, r.id, r.name, ...(r.keywords ?? [])].filter(Boolean))];
+      return { r, s: names.reduce((acc, n) => acc + mentionScore(p, n, strong), 0) };
+    })
+    .sort((a, b) => b.s - a.s);
+  const forbidden = scored.filter((x) => x.s < 0).map((x) => x.r.id);
+  if (scored[0] && scored[0].s > 0 && !(scored[1] && scored[1].s === scored[0].s))
+    return { id: scored[0].r.id, reason: `la misión pide ${scored[0].r.name}${forbidden.length ? ` (y prohíbe ${forbidden.join(", ")})` : ""}` };
   const isData = (DATA_WORDS.test(p) || isQuickLookup(prompt)) && !CODE_WORDS.test(p);
   if (isData && mcpAvailable) return { id: "none", reason: "es una consulta de datos: se trabaja sin repositorio, con los datos vía MCP" };
   const front = FRONT_WORDS.test(p);
   const back = BACK_WORDS.test(p);
-  const byKind = (k: string) => enabled.find((r) => r.kind === k);
+  const byKind = (k: string) => enabled.find((r) => r.kind === k && !forbidden.includes(r.id));
   if (front && back && byKind("frontend") && byKind("backend"))
     return { id: `${byKind("backend")!.id}${MULTI_REPO_SEP}${byKind("frontend")!.id}`, reason: "menciona front y back: el equipo de back y el de front trabajan en paralelo" };
   if (front && !back && byKind("frontend")) return { id: byKind("frontend")!.id, reason: "habla de interfaz / frontend" };

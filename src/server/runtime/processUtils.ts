@@ -15,6 +15,10 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
   }
+  // Nunca subir source maps ni usar credenciales de Sentry desde builds de agentes o de QA.
+  delete env.SENTRY_AUTH_TOKEN;
+  delete env.SENTRY_ORG;
+  delete env.SENTRY_PROJECT;
   // Evita que un Claude Code anidado herede la sesión del proceso padre.
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_SESSION_ID;

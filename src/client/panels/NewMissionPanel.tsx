@@ -129,7 +129,7 @@ export function NewMissionPanel() {
           <label>
             <span>Rama base</span>
             <select value={base} onChange={(e) => setBase(e.target.value)} disabled={repoId === "none"}>
-              <option value="">{repo ? `Por defecto (${repo.defaultBase})` : multi ? "Por defecto de cada repo" : repoId === "none" ? "No aplica" : "Por defecto del repo"}</option>
+              <option value="">{repoId === "none" ? "No aplica" : `Automática (la que pida la misión${repo ? `, o ${repo.defaultBase}` : ""})`}</option>
               {bases.map((b) => (
                 <option key={b} value={b}>
                   {b}
@@ -169,7 +169,7 @@ export function NewMissionPanel() {
           </div>
         )}
         <div className="fineprint">
-          {repoId === "auto" && <>Repositorio y rama son opcionales: si los dejas en automático, Atlas elige según la misión (o trabaja sin repo si es de datos). </>}
+          {repoId === "auto" && <>En automático se respeta lo que escribas: el repositorio que pidas (y no los que prohíbas), la rama base ("parte desde release/fase3.1") y el nombre de rama ("crea agentic/feature/…"). </>}
           {repoId === "none"
             ? "Sin repositorio: nadie modifica código; el equipo analiza y responde. "
             : multi

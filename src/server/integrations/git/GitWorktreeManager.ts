@@ -115,6 +115,13 @@ export class GitWorktreeManager {
     return Number(n) || 0;
   }
 
+  async localBranchExists(wt: string, branch: string): Promise<boolean> {
+    return git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], wt).then(
+      () => true,
+      () => false,
+    );
+  }
+
   async headSha(wt: string): Promise<string> {
     return git(["rev-parse", "HEAD"], wt);
   }

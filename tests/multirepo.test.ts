@@ -19,6 +19,7 @@ function makeRepo(name: string, pkg: object): string {
   git(["add", "-A"], seed);
   git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], seed);
   git(["push", "-q", "origin", "HEAD:refs/heads/release/fase2"], seed);
+  git(["push", "-q", "origin", "HEAD:refs/heads/release/fase3.1"], seed);
   return bare;
 }
 // Cada script de QA deja constancia de cuándo corrió, para comprobar que van en paralelo.
@@ -30,7 +31,7 @@ fs.writeFileSync(
   path.join(root, "repos.json"),
   JSON.stringify({
     repositories: [
-      { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2",
+      { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2", "release/fase3.1"], defaultBase: "release/fase2",
         qaStages: [["npm run build", "npm test"], [slow("after")]] },
       { id: "lrd-front", name: "lrd-front", github: "x/lrd-front", cloneUrl: front, shortName: "front", kind: "frontend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
     ],
@@ -129,4 +130,21 @@ test("consulta rápida de datos: un agente, sin plan ni reunión; aprende y la s
   const calls = fs.readFileSync(process.env.FAKE_CALLS!, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.equal(calls.filter((c) => c.kind === "plan").length, 0, "nunca pasó por la planificación");
   assert.equal(calls.filter((c) => c.kind === "quick").at(-1).knowsLesson, true, "la segunda consulta recibió la lección");
+});
+
+test("en Automático toma de la misión el repo, la rama base y el nombre de rama pedidos", { timeout: 90_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const prompt = "Implementa los totales en `x/lrd-back`. Parte obligatoriamente desde `release/fase3.1`. No uses `release/fase2`. Crea la rama `agentic/feature/totales`. No tocar `lrd-front`.";
+  const m0 = await orchestrator.createMission({ prompt, repositoryId: "auto", engine: "codex" });
+  assert.equal(m0.repositoryId, "lrd-back");
+  assert.equal(m0.baseBranch, "release/fase3.1");
+  let m = m0;
+  for (let i = 0; i < 300 && !["done", "failed"].includes(m.status); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    m = repo.getMission(m0.id)!;
+  }
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.equal(m.branch, "agentic/feature/totales");
+  assert.match(git(["branch", "--list", "agentic/feature/totales"], back), /agentic\/feature\/totales/);
 });

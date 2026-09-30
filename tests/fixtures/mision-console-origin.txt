@@ -1,0 +1,35 @@
+Misión: agregar filtro por origen en la consola general de pedidos de Fase 3.1
+Trabaja únicamente sobre el repositorio `Bryleo2009/lrd-front`.
+Parte obligatoriamente desde:
+
+```
+release/fase3.1
+```
+
+Antes de modificar cualquier archivo:
+
+1. Verifica que la rama base actual sea `release/fase3.1`.
+2. Confirma que el archivo objetivo exista.
+3. No uses `release/fase2`.
+4. No sustituyas el archivo objetivo por otro parecido.
+
+Crea una nueva rama a partir de `release/fase3.1` con un nombre del tipo:
+
+```
+agentic/feature/console-origin-filter
+```
+
+El archivo principal a modificar es:
+
+```
+src/views/mod-online/orders/Console.vue
+```
+
+No modificar `KitchenConsole.vue`.
+Reglas de implementación
+
+* No modificar backend.
+* No crear endpoints nuevos.
+No hacer merge.
+No modificar `release/fase3.1` directamente.
+No tocar `lrd-back`.

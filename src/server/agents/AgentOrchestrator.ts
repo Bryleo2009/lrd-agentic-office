@@ -10,7 +10,7 @@ import { gitManager, GitError, isProtected, slugify } from "../integrations/git/
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
 import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
-import { buildPlannerPrompt, deliveryPrefs, isQuickLookup, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { buildPlannerPrompt, deliveryPrefs, inferBase, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
@@ -152,7 +152,9 @@ export class AgentOrchestrator {
     const rs = repoId === NO_REPO ? [] : [...new Set(repoId.split(MULTI_REPO_SEP).map((x) => x.trim()).filter(Boolean))].map((x) => this.repoConfig(x));
     const r = rs[0] ?? null;
     // Una rama base elegida aplica a todos los repos (debe estar permitida en cada uno); si no, la de cada repo.
-    const baseFor = (x: RepositoryConfig) => input.baseBranch || x.defaultBase;
+    // Rama base: la elegida en el formulario; si no, la que pide el texto ("Parte desde release/fase3.1"); si no, la del repo.
+    const baseFor = (x: RepositoryConfig) => input.baseBranch || inferBase(prompt, x) || x.defaultBase;
+    const baseFromText = !input.baseBranch && rs.some((x) => inferBase(prompt, x));
     for (const x of rs) if (!x.allowedBases.includes(baseFor(x))) throw new MissionError(`Rama base no permitida en ${x.name}: ${baseFor(x)}`);
     const base = r ? baseFor(r) : "";
     const repos: MissionRepo[] =
@@ -197,6 +199,9 @@ export class AgentOrchestrator {
         detail: `Selección automática: ${repoReason}.`,
         status: "info",
       });
+    if (baseFromText) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Rama base tomada de la misión: ${base}`, detail: "El texto de la misión indica desde qué rama partir.", status: "info" });
+    const wantBranch = r ? requestedBranch(prompt) : null;
+    if (wantBranch) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Si hay cambios, la rama será ${wantBranch}`, detail: "Nombre pedido en la misión.", status: "info" });
     if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcpServers.join(", ")} (sólo lectura)`, status: "warning" });
     this.pushMission(id);
     const rt = newRuntime();
@@ -343,6 +348,17 @@ export class AgentOrchestrator {
     }
   }
 
+  /** Rama de entrega: la que pide la misión (si está libre) o una generada agentic/<área>/<slug>-<id>. */
+  private async branchName(mission: Mission, w: WorkRepo): Promise<string> {
+    const auto = `agentic/${mission.area}/${slugify(mission.prompt)}-${mission.id}`;
+    const want = requestedBranch(mission.prompt);
+    if (!want || isProtected(want)) return auto;
+    const taken = (await gitManager.remoteBranchExists(w.cfg, want)) || (await gitManager.localBranchExists(w.wt, want));
+    if (!taken) return want;
+    this.emit(mission.id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `La rama ${want} ya existe: se usa ${want}-${mission.id}`, status: "warning" });
+    return `${want}-${mission.id}`;
+  }
+
   /** Commit + rama nueva + publicación de UN repositorio de la misión (si tiene cambios). */
   private async deliverRepo(id: string, mission: Mission, w: WorkRepo, steps: MissionStep[], rt: MissionRuntime, prefs: { publish: boolean; directToBase: boolean }, multi: boolean): Promise<MissionRepo> {
     const out: MissionRepo = { repositoryId: w.cfg.id, baseBranch: w.base, worktree: w.wt, branch: null, commitSha: null, pushed: false, prUrl: null };
@@ -359,7 +375,7 @@ export class AgentOrchestrator {
     const direct = !onBranch && prefs.directToBase && !isProtected(w.base);
     if (prefs.directToBase && !direct && !onBranch)
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${w.base} está protegida${tag}: se usa una rama nueva`, status: "warning" });
-    const branch = onBranch ? current : direct ? w.base : `agentic/${mission.area}/${slugify(mission.prompt)}-${id}`;
+    const branch = onBranch ? current : direct ? w.base : await this.branchName(mission, w);
     if (!direct && !onBranch) {
       await gitManager.createBranch(w.wt, branch);
       repo.insertBranch({ repositoryId: w.cfg.id, missionId: id, name: branch, base: w.base, worktree: w.wt });
@@ -637,7 +653,9 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     const where =
       m.repositoryId === NO_REPO || !w
         ? "Misión sin repositorio (análisis / datos)."
-        : `Repositorio: ${w.cfg.name} (${w.cfg.kind ?? "otro"}) · trabajas sobre una copia aislada de ${w.base}; si hay cambios, el orquestador crea una rama nueva y la publica.${
+        : `Repositorio: ${w.cfg.name} (${w.cfg.github}, ${w.cfg.kind ?? "otro"}). Tu carpeta es una copia aislada de origin/${w.base} con HEAD separado (detached) A PROPÓSITO: la rama${
+            requestedBranch(m.prompt) ? ` ${requestedBranch(m.prompt)}` : " agentic/…"
+          } la crea el orquestador al final si hay cambios, y la publica. Para verificar la base usa \`git rev-parse HEAD origin/${w.base}\` (deben coincidir); que no haya rama activa es lo esperado, no un error.${
             others.length ? `\nEsta misión se trabaja en paralelo también en ${others.map((x) => x.cfg.name).join(", ")} (otro compañero se encarga): tú solo trabajas en ${w.cfg.name}. Respeta el contrato acordado en la tarea.` : ""
           }`;
     const a = getAgent(step.agentId);
@@ -741,6 +759,12 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_STARTED", title: `Vega: QA real${tag}`, status: "running", metadata: { stepId: step.id, repositoryId: r.id } });
     const diff = await gitManager.diffStat(wt);
     this.emit(id, "vega", { provider: "git", sessionId: null, type: "GIT_DIFF", title: `${diff.files.length} archivo(s) cambiados${tag}`, detail: diff.stat, status: "info", metadata: { files: diff.files, repositoryId: r.id } });
+    if (!diff.files.length) {
+      // Nadie cambió nada: no hay nada que probar (y correr QA solo daría fallas ajenas a la misión).
+      this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_STATUS", title: `Sin cambios${tag}: no hay nada que probar`, status: "info" });
+      this.setStep(id, step, { status: "done", result: "Sin cambios: QA no aplica", finishedAt: new Date().toISOString() });
+      return;
+    }
 
     let attempt = 0;
     for (;;) {

@@ -291,3 +291,21 @@ test("memoria: extrae LECCIÓN, limpia datos personales, refuerza duplicadas y e
   assert.match(t, /lrd\.lrd_auth_check falla en este entorno \("Faltan credenciales/);
   assert.ok(L.deleteLesson(a.id));
 });
+
+test("misión real: respeta repo, rama base y nombre de rama pedidos en el texto (y las prohibiciones)", async () => {
+  const fs = await import("node:fs");
+  const { inferBase, requestedBranch } = await import("../src/server/missions/MissionPlanner");
+  const text = fs.readFileSync("tests/fixtures/mision-console-origin.txt", "utf8");
+  const bases = ["release/fase2", "release/fase3.1", "main"];
+  const back = { ...repo, id: "lrd-back", name: "lrd-back", github: "Bryleo2009/lrd-back", kind: "backend" as const, allowedBases: bases };
+  const front = { ...repo, id: "lrd-front", name: "lrd-front", github: "Bryleo2009/lrd-front", shortName: "front", kind: "frontend" as const, allowedBases: bases };
+  const pick = inferRepo(text, [back, front], true);
+  assert.equal(pick.id, "lrd-front", "'No tocar lrd-back' no puede elegir lrd-back");
+  assert.match(pick.reason, /prohíbe lrd-back/);
+  assert.equal(inferBase(text, front), "release/fase3.1", "'No uses release/fase2' + 'Parte desde release/fase3.1'");
+  assert.equal(requestedBranch(text), "agentic/feature/console-origin-filter");
+
+  assert.equal(inferBase("Arregla el login", front), null, "sin pistas: la del repo");
+  assert.equal(requestedBranch("crea la rama feature/x"), null, "solo ramas agentic/");
+  assert.equal(inferRepo("No toques lrd-front; el bug está en la API", [back, front], false).id, "lrd-back");
+});
