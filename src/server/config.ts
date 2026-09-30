@@ -46,6 +46,13 @@ export const config = {
   githubPrEnabled: bool(env.GITHUB_PR_ENABLED, false),
   workspaceRoot: path.resolve(expandHome(env.LRD_WORKSPACE_ROOT || "~/.lrd-agentic-office")),
   agentEngines: parseAgentEngines(env.AGENT_ENGINES),
+  /** Automático: "mix" reparte los pasos entre Codex y Claude (el menos cargado); "single" usa el motor de la misión. */
+  engineStrategy: (env.ENGINE_STRATEGY === "single" ? "single" : "mix") as "mix" | "single",
+  /** Minutos que se evita un motor que llegó a su límite, si su mensaje no dice cuándo vuelve. */
+  engineCooldownMs: Math.max(1, Number(env.ENGINE_COOLDOWN_MIN ?? 30)) * 60_000,
+  /** Revisión cruzada: el otro motor revisa el diff antes de QA. */
+  crossReview: bool(env.CROSS_REVIEW, true),
+  crossReviewFixRounds: Math.max(0, Number(env.CROSS_REVIEW_FIX_ROUNDS ?? 1)),
   atlasReviewEnabled: bool(env.ATLAS_REVIEW_ENABLED, true),
   qaFixIterations: Math.max(0, Number(env.QA_FIX_ITERATIONS ?? 1)),
   /** Comandos de QA a la vez (build, lint, pruebas). 1 = en serie. */

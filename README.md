@@ -69,6 +69,10 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
    - **Ajustes por chat**: sobre una misión terminada, pídele un cambio al agente en su chat ("cambia…", "corrige…",
      "ajusta…"). Edita en la carpeta de esa misión y la oficina hace el commit en la misma rama, la publica y espera
      GitHub Actions. Las preguntas normales siguen siendo de solo lectura.
+   - **Codex + Claude Code juntos**: en Automático cada paso va al motor menos cargado (back y front en paralelo usan
+     uno cada uno; la preferencia de cada agente se respeta). Si un motor llega a su límite, el paso sigue con el otro y
+     la oficina lo recuerda como *saturado* hasta que vuelva (según su mensaje, o `ENGINE_COOLDOWN_MIN`), también tras
+     reinicios; la barra superior lo muestra. Con cambios de código, **el otro motor revisa** lo implementado antes de QA.
 4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
@@ -112,6 +116,9 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `GITHUB_PUSH_ENABLED` | `true` | Publica la rama `agentic/…` cuando la misión deja cambios (lo hace el orquestador, nunca la IA) |
 | `GITHUB_PR_ENABLED` | `false` | Además abre un PR contra la rama base |
 | `QA_PARALLEL` | `3` | Comandos de QA a la vez (build, pruebas…). `1` = en serie |
+| `ENGINE_STRATEGY` | `mix` | Automático reparte los pasos entre Codex y Claude (el menos cargado). `single`: todo con el motor de la misión |
+| `ENGINE_COOLDOWN_MIN` | `30` | Minutos que se evita un motor que llegó a su límite (si su mensaje no dice cuándo vuelve) |
+| `CROSS_REVIEW` / `CROSS_REVIEW_FIX_ROUNDS` | `true` / `1` | El otro motor revisa lo implementado; lo BLOQUEANTE lo corrige el implementador antes de QA |
 | `CI_WAIT_ENABLED` | `true` | Tras publicar la rama, esperar GitHub Actions (requiere `gh` con sesión) |
 | `CI_FIX_ITERATIONS` | `2` | Correcciones automáticas si Actions falla por los cambios de la misión |
 | `CI_TIMEOUT_MIN` / `CI_APPEAR_SEC` | `40` / `180` | Espera máxima del CI / tiempo para concluir que la rama no dispara workflows |

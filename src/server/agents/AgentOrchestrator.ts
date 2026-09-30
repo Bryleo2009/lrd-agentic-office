@@ -15,7 +15,7 @@ import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
-import { commandExitReason, explainGitError } from "../runtime/humanize";
+import { commandExitReason, explainGitError, saturationFrom } from "../runtime/humanize";
 import { tail as tailText } from "../runtime/processUtils";
 import { runtime } from "../runtime/RuntimeDetector";
 import { messageBus, type Handoff } from "./AgentMessageBus";
@@ -134,6 +134,15 @@ export class AgentOrchestrator {
     const engine: EngineChoice = input.engine ?? "auto";
     await runtime.detect();
     const provider = runtime.resolve(engine);
+    const satBoth = (["codex", "claude"] as Provider[]).filter((p) => runtime.isUsable(p)).every((p) => runtime.saturationOf(p));
+    if (satBoth && (runtime.isUsable("codex") || runtime.isUsable("claude"))) {
+      const when = (["codex", "claude"] as Provider[])
+        .map((p) => runtime.saturationOf(p))
+        .filter(Boolean)
+        .map((s) => new Date(s!.until).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" }))
+        .sort()[0];
+      throw new MissionError(`Codex y Claude Code llegaron a su límite. El primero vuelve ~${when}; lanza la misión después.`, 409);
+    }
     if (!runtime.isUsable(provider)) {
       const st = runtime.snapshot().find((s) => s.provider === provider);
       throw new MissionError(`${st?.label ?? provider} no disponible: ${st?.message ?? "sin detalle"}. No se usará API como alternativa.`, 409);
@@ -683,7 +692,13 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
       for (const rid of writeRepos) {
         const cfg = rs.find((x) => x.id === rid);
         const qid = multi && cfg ? `qa-${cfg.shortName}` : "qa";
-        const own = steps.filter((s) => s.kind === "agent" && (s.repositoryId ?? null) === rid).map(short);
+        let own = steps.filter((s) => s.kind === "agent" && (s.repositoryId ?? null) === rid).map(short);
+        // Revisión cruzada: el otro motor revisa lo implementado antes de QA.
+        if (config.crossReview) {
+          const xid = multi && cfg ? `xreview-${cfg.shortName}` : "xreview";
+          steps.push(this.newStep(missionId, xid, "atlas", multi && cfg ? `Revisión cruzada · ${cfg.name}` : "Revisión cruzada del código", mission.prompt, own, false, "xreview", rid));
+          own = [xid];
+        }
         qaIds.push(qid);
         steps.push(this.newStep(missionId, qid, "vega", multi && cfg ? `QA ${cfg.name}: build y pruebas` : "QA: build y pruebas reales", "Ejecutar build/tests del repositorio", own, false, "qa", rid));
       }
@@ -731,6 +746,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     // Entregar handoffs reales de las dependencias
     await this.deliverHandoffs(id, step, all);
     if (step.kind === "qa" && w) return this.runQaStep(id, w, step, rt);
+    if (step.kind === "xreview" && w) return this.runCrossReviewStep(id, w, step, all, rt);
     if (step.kind === "review") return this.runReviewStep(id, wt, step, all, rt);
 
     const mission = repo.getMission(id)!;
@@ -813,6 +829,10 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
   }
 
   /** Ejecuta un agente real y publica sus eventos. */
+  /**
+   * Ejecuta un agente real y publica sus eventos. Si el motor llega a su límite (o está saturado),
+   * lo recuerda temporalmente y reintenta el mismo paso con el otro motor (una vez).
+   */
   private async runAgent(
     missionId: string,
     agentId: AgentId,
@@ -823,22 +843,69 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     title: string,
     rt: MissionRuntime,
     step?: MissionStep,
-  ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; text: string; provider: Provider } | { ok: false; error: string; provider: Provider }> {
+    let current = provider;
+    for (let attempt = 0; ; attempt++) {
+      const release = runtime.acquire(current); // síncrono: el reparto ve esta carga de inmediato
+      let res: Awaited<ReturnType<AgentOrchestrator["runAgentOnce"]>>;
+      try {
+        res = await this.runAgentOnce(missionId, agentId, current, cwd, permission, prompt, title, rt, step);
+      } finally {
+        release();
+      }
+      if (res.ok || rt.cancelled) return { ...res, provider: current };
+      const sat = saturationFrom(res.raw, config.engineCooldownMs);
+      if (!sat) return { ok: false, error: res.error, provider: current };
+      const s = runtime.markSaturated(current, sat.reason, sat.ms);
+      eventBus.broadcast({ kind: "runtime", runtime: runtime.snapshot() });
+      const back = new Date(s.until).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+      const alt = runtime.other(current);
+      const label = (p: Provider) => (p === "codex" ? "Codex" : "Claude Code");
+      if (attempt === 0 && runtime.isAvailable(alt)) {
+        this.emit(missionId, agentId, {
+          provider: "system",
+          sessionId: null,
+          type: "AGENT_STATUS",
+          title: `${label(current)} ${sat.reason} (vuelve ~${back}): ${getAgent(agentId).name} sigue con ${label(alt)}`,
+          detail: `Mientras tanto la oficina no usará ${label(current)}.`,
+          status: "warning",
+          metadata: { engineSwitch: { from: current, to: alt } },
+        });
+        current = alt;
+        continue;
+      }
+      return { ok: false, error: `${res.error} (${label(current)} ${sat.reason}; vuelve ~${back}${runtime.isAvailable(alt) ? "" : `, y ${label(alt)} tampoco está disponible`})`, provider: current };
+    }
+  }
+
+  private async runAgentOnce(
+    missionId: string,
+    agentId: AgentId,
+    provider: Provider,
+    cwd: string,
+    permission: PermissionProfile,
+    prompt: string,
+    title: string,
+    rt: MissionRuntime,
+    step?: MissionStep,
+  ): Promise<{ ok: true; text: string } | { ok: false; error: string; raw: string }> {
     let entry;
     try {
       entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission, mcpAllow: repo.getMission(missionId)?.mcpServers ?? [] });
     } catch (e) {
       const msg = (e as Error).message;
       this.emit(missionId, agentId, { provider, sessionId: null, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} no pudo empezar`, detail: msg, status: "error" });
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, raw: msg };
     }
     const exec = runtime.get(provider);
     entry.busy = true;
     sessions.sync(entry, "running");
-    this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_STARTED", title: `${getAgent(agentId).name}: ${title}`, status: "running", metadata: { stepId: step?.id ?? null, permission } });
+    if (step) this.setStep(missionId, step, { provider });
+    this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_STARTED", title: `${getAgent(agentId).name}: ${title}`, status: "running", metadata: { stepId: step?.id ?? null, permission, engine: provider } });
     const iter = entry.session.hasTurn ? exec.sendMessage(entry.session, prompt) : exec.executeTask(entry.session, { prompt, title });
     let finalText = "";
     let error: string | null = null;
+    let raw = "";
     try {
       for await (const ev of iter) {
         this.publishExecutorEvent(missionId, agentId, provider, entry.session.cliSessionId, ev, step);
@@ -847,20 +914,22 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
         if (ev.type === "AGENT_ERROR") {
           const hint = (ev.metadata as { hint?: string } | undefined)?.hint;
           error = hint ? `${ev.title}. ${hint}` : `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
+          raw += `${ev.title}\n${ev.detail ?? ""}\n`;
         }
       }
     } catch (e) {
       error = (e as Error).message;
+      raw += error;
       this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_ERROR", title: "Error interno de la oficina al ejecutar al agente", detail: error, status: "error" });
     } finally {
       entry.busy = false;
       if (step) this.setStep(missionId, step, { sessionId: entry.session.cliSessionId });
     }
     sessions.sync(entry, error ? "error" : "idle");
-    if (rt.cancelled) return { ok: false, error: "Cancelada" };
+    if (rt.cancelled) return { ok: false, error: "Cancelada", raw: "" };
     if (error) {
       this.emit(missionId, agentId, { provider, sessionId: entry.session.cliSessionId, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} no pudo continuar`, detail: error, status: "error" });
-      return { ok: false, error };
+      return { ok: false, error, raw };
     }
     return { ok: true, text: finalText };
   }
@@ -878,6 +947,88 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
   }
 
   // ------------------------------------------------------------------
+  /**
+   * Revisión cruzada: un motor distinto al que implementó revisa el diff contra la misión.
+   * Si encuentra problemas BLOQUEANTES, el implementador (en su motor) los corrige antes de QA.
+   */
+  private async runCrossReviewStep(id: string, w: WorkRepo, step: MissionStep, all: MissionStep[], rt: MissionRuntime): Promise<void> {
+    const mission = repo.getMission(id)!;
+    const multi = rt.repos.size > 1;
+    const tag = multi ? ` · ${w.cfg.name}` : "";
+    const writers = all.filter((s) => s.kind === "agent" && s.writes && s.status === "done" && (s.repositoryId ?? w.cfg.id) === w.cfg.id);
+    const writerEngines = [...new Set(writers.map((s) => s.provider).filter((p): p is Provider => !!p))];
+    const avoid = writerEngines.length === 1 ? writerEngines[0] : null;
+    const diff = await gitManager.diffStat(w.wt);
+    if (!diff.files.length) {
+      this.setStep(id, step, { status: "done", result: "Sin cambios: no hay nada que revisar", finishedAt: new Date().toISOString() });
+      return;
+    }
+    const provider = runtime.choose({ agentId: "atlas", missionProvider: mission.provider, engine: mission.engine, avoid });
+    const label = (p: Provider) => (p === "codex" ? "Codex" : "Claude Code");
+    this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
+    this.emit(id, "atlas", {
+      provider: "system",
+      sessionId: null,
+      type: "AGENT_STATUS",
+      title: avoid && provider !== avoid ? `Revisión cruzada${tag}: ${label(provider)} revisa lo que implementó ${label(avoid)}` : `Revisión cruzada${tag} con ${label(provider)}${avoid ? ` (el otro motor no está disponible)` : ""}`,
+      status: "info",
+    });
+    const prompt = `Eres revisor de código senior. Otro motor implementó esta misión y tú revisas su trabajo con ojos frescos.
+Misión: "${mission.prompt.slice(0, 4000)}"
+Repositorio: ${w.cfg.name} (base ${w.base}). NO modifiques archivos.
+
+Revisa el diff contra lo pedido: requisitos incumplidos, bugs, regresiones, casos borde, seguridad, cambios fuera de alcance.
+- Por cada problema real escribe una línea "BLOQUEANTE: archivo:línea — qué está mal y cómo corregirlo".
+- Observaciones menores: líneas "SUGERENCIA: …" (no bloquean).
+- Si no hay nada bloqueante, escribe una línea "APROBADO".
+Termina con "RESUMEN:" y una frase corta.
+
+git diff --stat:
+${diff.stat}
+
+Diff:
+${diff.patch.slice(0, 40000)}`;
+    const res = await this.runAgent(id, "atlas", provider, w.wt, "read-only", prompt, step.title, rt, step);
+    if (!res.ok) {
+      // Una revisión que no se pudo hacer no bloquea la misión: QA y la revisión final siguen.
+      this.setStep(id, step, { status: "done", result: `Revisión cruzada no disponible: ${res.error}`, finishedAt: new Date().toISOString() });
+      return;
+    }
+    let review = this.absorb(id, "atlas", res.text, w.cfg.id);
+    const blocking = review.split(/\r?\n/).filter((l) => /^\s*[-*•]?\s*BLOQUEANTE\s*:/i.test(l));
+    const writer = writers.at(-1);
+    for (let round = 0; blocking.length && writer && round < config.crossReviewFixRounds; round++) {
+      this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Revisión cruzada${tag}: ${blocking.length} punto(s) bloqueante(s); se los paso a ${getAgent(writer.agentId).name}`, detail: blocking.join("\n"), status: "warning" });
+      messageBus.handoff(id, "atlas", writer.agentId, `Revisión: ${blocking.length} punto(s) a corregir`, review);
+      await sleep(config.visualPacingMs);
+      const fixProvider = runtime.choose({ agentId: writer.agentId, missionProvider: mission.provider, engine: mission.engine, prefer: writer.provider });
+      const fix = await this.runAgent(
+        id,
+        writer.agentId,
+        fixProvider,
+        w.wt,
+        "workspace-write",
+        `${getAgent(writer.agentId).systemBrief}
+Un revisor (${label(provider)}) revisó tu implementación de la misión y encontró estos puntos BLOQUEANTES. Corrígelos con el cambio mínimo; si alguno es un falso positivo, no lo cambies y explica por qué.
+
+${messageBus
+  .take(id, writer.agentId)
+  .map((h) => h.payload)
+  .join("\n\n")
+  .slice(0, 20000)}
+
+No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
+        "Corregir lo señalado en la revisión",
+        rt,
+      );
+      review += fix.ok ? `\n\nCorrección de ${getAgent(writer.agentId).name}: ${summaryLine(fix.text)}` : `\n\nNo se pudo corregir: ${fix.error}`;
+      if (fix.ok) this.absorb(id, writer.agentId, fix.text, w.cfg.id);
+      break;
+    }
+    if (!blocking.length) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Revisión cruzada${tag}: aprobado por ${label(provider)}`, status: "success" });
+    this.setStep(id, step, { status: "done", result: review.slice(0, 20000), finishedAt: new Date().toISOString() });
+  }
+
   private async runQaStep(id: string, w: WorkRepo, step: MissionStep, rt: MissionRuntime): Promise<void> {
     const { cfg: r, wt } = w;
     const multi = rt.repos.size > 1;
@@ -1018,7 +1169,10 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     };
     if (diff.files.length)
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_DIFF", title: `Diff final: ${diff.files.length} archivo(s)${multi ? ` en ${diffs.filter(({ d }) => d.files.length).length} repos` : ""}`, detail: diff.stat, status: "info", metadata: { files: diff.files } });
-    const findings = all.filter((s) => s.kind === "agent" && s.result).map((s) => `## ${getAgent(s.agentId).name} — ${s.title}\n${s.result}`).join("\n\n");
+    const findings = all
+      .filter((s) => (s.kind === "agent" || s.kind === "xreview") && s.result)
+      .map((s) => `## ${getAgent(s.agentId).name} — ${s.title}${s.provider ? ` (${s.provider === "codex" ? "Codex" : "Claude Code"})` : ""}\n${s.result}`)
+      .join("\n\n");
     const inbound = messageBus.take(id, "atlas");
     let summary = findings || "Sin resultados de agentes.";
     if (config.atlasReviewEnabled) {
@@ -1056,10 +1210,12 @@ Termina con "RESUMEN:" y una frase corta.`;
     const prior = mission ? sessions.get(mission.id, agentId) : sessions.get(null, agentId);
     // Motor: el elegido en el chat > el preferido del empleado > el de su misión > el por defecto.
     const pref = getAgent(agentId).engine;
-    const provider: Provider =
+    let provider: Provider =
       engine === "codex" || engine === "claude"
         ? engine
         : prior?.session.provider ?? (pref && runtime.isUsable(pref) ? pref : mission ? runtime.forAgent(agentId, mission.provider, mission.engine) : runtime.resolve("auto"));
+    // Motor saturado (límite de uso): se usa el otro mientras tanto.
+    if (!runtime.isAvailable(provider) && runtime.isAvailable(runtime.other(provider))) provider = runtime.other(provider);
     const existing = prior && prior.session.provider === provider ? prior : undefined;
     if (!runtime.isUsable(provider)) {
       const st = runtime.snapshot().find((s) => s.provider === provider);
@@ -1101,6 +1257,7 @@ Termina con "RESUMEN:" y una frase corta.`;
     const exec = runtime.get(provider);
     entry.busy = true;
     eventBus.publish({ missionId: mid, agentId, provider: "system", sessionId: entry.session.cliSessionId, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
+    const release = runtime.acquire(provider);
     void (async () => {
       let err: string | undefined;
       try {
@@ -1114,11 +1271,27 @@ Termina con "RESUMEN:" y una frase corta.`;
       } catch (e) {
         err = (e as Error).message;
       } finally {
+        release();
         entry.busy = false;
         entry.session.config.permission = "read-only";
         sessions.sync(entry, err ? "error" : "idle");
-        eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
       }
+      // Límite de uso a mitad del chat: se recuerda y el mensaje se reenvía al otro motor (una vez).
+      const sat = err ? saturationFrom(err, config.engineCooldownMs) : null;
+      if (sat) {
+        const s = runtime.markSaturated(provider, sat.reason, sat.ms);
+        eventBus.broadcast({ kind: "runtime", runtime: runtime.snapshot() });
+        const alt = runtime.other(provider);
+        const name = (p: Provider) => (p === "codex" ? "Codex" : "Claude Code");
+        const back = new Date(s.until).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+        if (runtime.isAvailable(alt) && engine === "auto") {
+          if (mid) this.chatNote(mid, agentId, `${name(provider)} ${sat.reason} (vuelve ~${back}). Le paso tu mensaje a ${name(alt)}.`);
+          eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true });
+          await this.chat(agentId, message, missionId, alt).catch((e) => eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: (e as Error).message }));
+          return;
+        }
+      }
+      eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
       if (change && !err)
         await this.deliverChatChange(mission!, agentId, change, message).catch((e) => {
           const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;

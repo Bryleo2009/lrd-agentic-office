@@ -124,6 +124,16 @@ export function buildReport(m: Mission): string {
   if (headline) out.push(`En resumen: ${headline}`, "");
   if (body) out.push(body.length > 3500 ? `${body.slice(0, 3500)}…` : body, "");
   if (team.length) out.push(`Trabajamos en esto: ${team.join(", ")}.`);
+  // Qué motor hizo qué (cuando se repartió entre Codex y Claude Code, o hubo revisión cruzada).
+  const name = (p: string | null) => (p === "codex" ? "Codex" : p === "claude" ? "Claude Code" : "");
+  const impl = m.steps.filter((s) => s.kind === "agent" && s.status === "done" && s.provider);
+  const xr = m.steps.filter((s) => s.kind === "xreview" && s.status === "done" && s.provider);
+  if (new Set(impl.map((s) => s.provider)).size > 1 || xr.length)
+    out.push(
+      `Motores: ${[...new Map(impl.map((s) => [s.agentId, `${agentOf(s.agentId).name} · ${name(s.provider)}`])).values()].join(", ")}${
+        xr.length ? `; revisión cruzada: ${[...new Set(xr.map((s) => name(s.provider)))].join(", ")}` : ""
+      }.`,
+    );
 
   const delivered = (m.repos ?? []).filter((r) => r.commitSha && r.branch);
   if (m.repos?.length > 1) {

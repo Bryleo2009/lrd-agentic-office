@@ -242,6 +242,12 @@ code {
 .engine.bad b {
   color: var(--err);
 }
+.engine.warn i {
+  background: #f59e0b;
+}
+.engine.warn b {
+  color: #fbbf24;
+}
 .engine.muted {
   color: var(--muted);
 }

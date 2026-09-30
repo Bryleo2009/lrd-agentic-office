@@ -28,11 +28,17 @@ export function TopBar({ engine }: { engine: OfficeEngine | null }) {
         {runtime.length === 0 && <span className="engine muted">Detectando motores…</span>}
         {runtime.map((r) => {
           const ok = r.enabled && r.installed && r.authenticated !== false;
+          const sat = r.saturatedUntil && new Date(r.saturatedUntil).getTime() > Date.now() ? new Date(r.saturatedUntil) : null;
+          const back = sat?.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
           return (
-            <span key={r.provider} className={`engine ${ok ? "ok" : "bad"}`} title={`${r.message}${r.version ? ` · v${r.version}` : ""}`}>
+            <span
+              key={r.provider}
+              className={`engine ${ok ? (sat ? "warn" : "ok") : "bad"}`}
+              title={sat ? `${r.label} ${r.saturationReason ?? "saturado"}. La oficina usa el otro motor hasta las ${back}.` : `${r.message}${r.version ? ` · v${r.version}` : ""}`}
+            >
               <i />
               {r.label}
-              <b>{ok ? (r.authenticated ? "Conectado" : "Instalado") : r.installed ? "Sin sesión" : "No disponible"}</b>
+              <b>{sat ? `Saturado · vuelve ${back}` : ok ? (r.authenticated ? "Conectado" : "Instalado") : r.installed ? "Sin sesión" : "No disponible"}</b>
             </span>
           );
         })}

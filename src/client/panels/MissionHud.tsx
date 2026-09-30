@@ -36,7 +36,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
                 <button key={s.id} className={`step ${s.status}`} onClick={() => onAgent(s.agentId)} title={`${s.title} · ${STEP_STATUS[s.status]}${s.error ? `\n${s.error}` : ""}`}>
                   <i style={{ background: a.color }} />
                   <span>{a.name}</span>
-                  <small>{s.kind === "ci" ? "Actions" : s.kind === "qa" ? "QA" : s.kind === "review" ? "revisión" : s.kind === "plan" ? "plan" : s.writes ? "cambios" : "análisis"}</small>
+                  <small>{s.kind === "xreview" ? "revisión cruzada" : s.kind === "ci" ? "Actions" : s.kind === "qa" ? "QA" : s.kind === "review" ? "revisión" : s.kind === "plan" ? "plan" : s.writes ? "cambios" : "análisis"}</small>
                 </button>
               );
             })}

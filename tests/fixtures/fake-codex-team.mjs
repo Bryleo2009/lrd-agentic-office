@@ -13,7 +13,14 @@ if (a[0] !== "exec") process.exit(0);
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
-  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, pid: process.pid, resumed: input.includes("se interrumpió"), knowsLesson: input.includes("Lecciones de misiones anteriores") }) + "\n");
+  const engine = process.env.FAKE_ENGINE || "codex";
+  // Límite de uso simulado: FAKE_LIMIT_ENGINE=codex y FAKE_LIMIT_ON=<texto del prompt>
+  if (process.env.FAKE_LIMIT_ENGINE === engine && process.env.FAKE_LIMIT_ON && input.includes(process.env.FAKE_LIMIT_ON)) {
+    console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
+    console.log(JSON.stringify({ type: "error", message: "You've hit your usage limit. Try again in 45 minutes." }));
+    process.exit(1);
+  }
+  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, engine, pid: process.pid, resumed: input.includes("se interrumpió"), knowsLesson: input.includes("Lecciones de misiones anteriores") }) + "\n");
   const say = (text) => {
     console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
     console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text } }));

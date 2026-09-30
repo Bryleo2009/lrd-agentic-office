@@ -152,3 +152,36 @@ export function explainGitError(message: string, output = ""): Explained {
   const last = lastUsefulLine(output) || lastUsefulLine(message);
   return { title: "git no pudo completar la publicación", hint: last ? `Lo último que dijo git: "${last}".` : "Revisa el detalle técnico." };
 }
+
+/**
+ * ¿El error significa que el motor está saturado (límite de uso o servicio caído)?
+ * Devuelve cuánto evitarlo: lo que diga el mensaje ("try again in 2 hours", "resets at 3pm",
+ * "retry after 120 seconds") o `defaultMs`. Un servicio saturado se evita menos tiempo que un límite de uso.
+ */
+export function saturationFrom(text: string, defaultMs: number, now = new Date()): { ms: number; reason: string } | null {
+  const t = text || "";
+  const limit = /rate.?limit|\b429\b|usage limit|quota|too many requests|insufficient_quota|limit reached|hit your .*limit|l[ií]mite de uso/i.test(t);
+  const overloaded = !limit && /overloaded|\b52[09]\b|\b50[234]\b|service unavailable|saturad[oa]|capacity/i.test(t);
+  if (!limit && !overloaded) return null;
+  const reason = limit ? "llegó a su límite de uso" : "servicio saturado";
+  let ms: number | null = null;
+  const dur = t.match(/(?:try again|retry|resets?|vuelve|intenta de nuevo)[^\n]{0,20}?\bin\s+((?:\d+\s*(?:h(?:ours?|rs?)?|m(?:in(?:ute)?s?)?|s(?:ec(?:ond)?s?)?)\s*(?:and\s*)?)+)/i);
+  if (dur) {
+    ms = 0;
+    for (const m of dur[1].matchAll(/(\d+)\s*(h|m|s)/gi)) ms += Number(m[1]) * (m[2].toLowerCase() === "h" ? 3_600_000 : m[2].toLowerCase() === "m" ? 60_000 : 1000);
+  }
+  const after = t.match(/retry[- ]after[:\s]+(\d+)/i);
+  if (!ms && after) ms = Number(after[1]) * 1000;
+  const at = t.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!ms && at) {
+    let h = Number(at[1]) % 24;
+    if (at[3]?.toLowerCase() === "pm" && h < 12) h += 12;
+    if (at[3]?.toLowerCase() === "am" && h === 12) h = 0;
+    const d = new Date(now);
+    d.setHours(h, Number(at[2] ?? 0), 0, 0);
+    if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
+    ms = d.getTime() - now.getTime();
+  }
+  if (!ms) ms = overloaded ? Math.min(defaultMs, 5 * 60_000) : defaultMs;
+  return { ms: Math.min(ms, 24 * 3_600_000), reason };
+}

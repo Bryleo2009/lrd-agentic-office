@@ -74,6 +74,9 @@ export interface RuntimeStatus {
   mcpServers: McpServerInfo[];
   message: string;
   checkedAt: string;
+  /** Si el motor llegó a su límite: hasta cuándo no se usará (se recuerda temporalmente). */
+  saturatedUntil?: string | null;
+  saturationReason?: string | null;
 }
 
 export type MissionStatus =
@@ -98,7 +101,7 @@ export interface MissionStep {
   task: string;
   dependsOn: string[];
   writes: boolean;
-  kind: "plan" | "agent" | "qa" | "review" | "ci";
+  kind: "plan" | "agent" | "xreview" | "qa" | "review" | "ci";
   status: StepStatus;
   provider: Provider | null;
   sessionId: string | null;
