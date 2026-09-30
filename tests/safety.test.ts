@@ -197,3 +197,11 @@ test("LRD Connector (servidor 'lrd') + un MCP de QA registrado: 'lrd' se toma co
   const { guideFor } = await import("../src/server/missions/guides");
   assert.match(guideFor("data-lookup"), /SIEMPRE busca con `LIKE`[\s\S]*ORD-RDMI-260930123604[\s\S]*fecha de HOY[\s\S]*solo DESPUÉS, con el número completo/);
 });
+
+test("servidores MCP ocultos: se guardan en los ajustes y se pueden volver a mostrar", async () => {
+  const S = await import("../src/server/settings");
+  assert.deepEqual(S.setMcpHidden("lrd", true), ["lrd"]);
+  assert.deepEqual(S.setMcpHidden("cua_repl", true), ["cua_repl", "lrd"]);
+  assert.deepEqual(S.setMcpHidden("lrd", false), ["cua_repl"]);
+  assert.deepEqual(S.hiddenMcp(), ["cua_repl"]);
+});

@@ -27,5 +27,6 @@ export const api = {
     req<MissionQuestion>(`/api/missions/${missionId}/questions/${questionId}/answer`, { method: "POST", body: JSON.stringify({ answer }) }),
   usage: (days = 30) => req<UsageMetrics>(`/api/metrics/usage?days=${days}`),
   cleanup: (dryRun: boolean) => req<CleanupReport>("/api/maintenance/cleanup", { method: "POST", body: JSON.stringify({ dryRun }) }),
+  setMcpHidden: (name: string, hidden: boolean) => req<RuntimeStatus[]>(`/api/mcp/${encodeURIComponent(name)}/hidden`, { method: "PUT", body: JSON.stringify({ hidden }) }),
   runtime: (force = false) => req<RuntimeStatus[]>(`/api/runtime${force ? "?force=1" : ""}`),
 };

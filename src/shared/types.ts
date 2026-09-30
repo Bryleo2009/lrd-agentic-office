@@ -58,6 +58,8 @@ export interface McpServerInfo {
   name: string;
   enabled: boolean;
   transport: string;
+  /** Ocultado por el usuario en Ajustes: no se ofrece en las misiones y queda desactivado en ellas. */
+  hidden?: boolean;
 }
 
 export interface RuntimeStatus {

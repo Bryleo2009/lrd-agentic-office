@@ -17,7 +17,7 @@ import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
 import { cleanupOld } from "./maintenance";
 import { usageMetrics } from "./metrics";
-import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
+import { repositoriesWithLocal, resetProfile, setMcpHidden, setRepoPath, team, updateProfile } from "./settings";
 
 void _sessions;
 
@@ -64,6 +64,16 @@ app.get("/api/snapshot", async () => snapshot());
 app.get("/api/runtime", async (req) => {
   const force = (req.query as { force?: string }).force === "1";
   const rt = await runtime.detect(force);
+  eventBus.broadcast({ kind: "runtime", runtime: rt });
+  return rt;
+});
+
+// Ocultar / mostrar un servidor MCP en las misiones (Ajustes → Datos).
+app.put("/api/mcp/:name/hidden", async (req) => {
+  const name = (req.params as { name: string }).name;
+  if (!/^[\w.@-]{1,80}$/.test(name)) throw new MissionError("Nombre de servidor inválido");
+  setMcpHidden(name, !!((req.body ?? {}) as { hidden?: boolean }).hidden);
+  const rt = runtime.snapshot();
   eventBus.broadcast({ kind: "runtime", runtime: rt });
   return rt;
 });

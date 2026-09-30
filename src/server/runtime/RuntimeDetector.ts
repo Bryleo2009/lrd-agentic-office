@@ -5,7 +5,7 @@ import { config } from "../config";
 import type { AgentExecutor } from "./AgentExecutor";
 import { ClaudeCodeExecutor } from "./ClaudeCodeExecutor";
 import { CodexCliExecutor } from "./CodexCliExecutor";
-import { profile } from "../settings";
+import { hiddenMcp, profile } from "../settings";
 
 interface Saturation {
   until: number;
@@ -40,9 +40,15 @@ export class RuntimeDetector {
   /** Estado de los motores, incluida la saturación temporal. */
   snapshot(): RuntimeStatus[] {
     this.restore();
+    const hidden = new Set(hiddenMcp());
     return this.last.map((s) => {
       const sat = this.saturationOf(s.provider);
-      return { ...s, saturatedUntil: sat ? new Date(sat.until).toISOString() : null, saturationReason: sat?.reason ?? null };
+      return {
+        ...s,
+        mcpServers: s.mcpServers.map((m) => ({ ...m, hidden: hidden.has(m.name) })),
+        saturatedUntil: sat ? new Date(sat.until).toISOString() : null,
+        saturationReason: sat?.reason ?? null,
+      };
     });
   }
 

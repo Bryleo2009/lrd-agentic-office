@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
+import { isToolMcp, lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
@@ -391,6 +391,16 @@ function DataTab() {
                 {m.engine} · {m.transport}
               </span>
               <span className={`mini-pill ${m.enabled ? "ok" : "bad"}`}>{m.enabled ? "habilitado" : "deshabilitado"}</span>
+              {isToolMcp(m.name) && <span className="muted">herramienta, no datos</span>}
+              <span className="grow" />
+              {m.hidden && <span className="muted">oculto en misiones</span>}
+              <button
+                className="btn"
+                title={m.hidden ? "Volver a ofrecerlo al crear misiones" : "No ofrecerlo al crear misiones (queda desactivado en ellas)"}
+                onClick={() => void api.setMcpHidden(m.name, !m.hidden).then((r) => useStore.getState().setRuntime(r))}
+              >
+                {m.hidden ? "Mostrar" : "Ocultar"}
+              </button>
             </div>
           </div>
         ))

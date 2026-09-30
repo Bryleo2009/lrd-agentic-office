@@ -23,6 +23,8 @@ interface ProfileOverride {
 interface SettingsFile {
   repoPaths: Record<string, string>;
   team: Partial<Record<AgentId, ProfileOverride>>;
+  /** Servidores MCP que no se ofrecen en las misiones (p. ej. un conector duplicado o herramientas). */
+  hiddenMcp?: string[];
 }
 
 const FILE = () => path.join(config.workspaceRoot, "settings.json");
@@ -56,7 +58,7 @@ const FALLBACK_APPEARANCE: Appearance = {
 function read(): SettingsFile {
   try {
     const j = JSON.parse(fs.readFileSync(FILE(), "utf8"));
-    return { repoPaths: j.repoPaths ?? {}, team: j.team ?? {} };
+    return { repoPaths: j.repoPaths ?? {}, team: j.team ?? {}, hiddenMcp: Array.isArray(j.hiddenMcp) ? j.hiddenMcp.map(String) : [] };
   } catch {
     return { repoPaths: {}, team: {} };
   }
@@ -75,6 +77,22 @@ function baseAppearance(id: AgentId): Appearance {
   } catch {
     return FALLBACK_APPEARANCE;
   }
+}
+
+// ---------------- servidores MCP ocultos ----------------
+
+export function hiddenMcp(): string[] {
+  return read().hiddenMcp ?? [];
+}
+
+export function setMcpHidden(name: string, hidden: boolean): string[] {
+  const s = read();
+  const cur = new Set(s.hiddenMcp ?? []);
+  if (hidden) cur.add(name);
+  else cur.delete(name);
+  s.hiddenMcp = [...cur].sort();
+  write(s);
+  return s.hiddenMcp;
 }
 
 // ---------------- equipo ----------------

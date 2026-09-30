@@ -104,7 +104,7 @@ export class AgentOrchestrator {
 
   /** Nombres de servidores MCP habilitados en el motor dado. */
   private mcpNames(provider: Provider): string[] {
-    return (runtime.snapshot().find((s) => s.provider === provider)?.mcpServers ?? []).filter((m) => m.enabled).map((m) => m.name);
+    return (runtime.snapshot().find((s) => s.provider === provider)?.mcpServers ?? []).filter((m) => m.enabled && !m.hidden).map((m) => m.name);
   }
 
   private repoConfig(id: string): RepositoryConfig {

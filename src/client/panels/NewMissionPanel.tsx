@@ -39,7 +39,7 @@ export function NewMissionPanel() {
     if (base && !bases.includes(base)) setBase("");
   }, [bases.join("|"), base]);
   const effEngine = engine === "auto" ? config?.aiEngineDefault ?? "codex" : engine;
-  const mcp = runtime.find((r) => r.provider === effEngine)?.mcpServers.filter((m) => m.enabled) ?? [];
+  const mcp = runtime.find((r) => r.provider === effEngine)?.mcpServers.filter((m) => m.enabled && !m.hidden) ?? [];
   useEffect(() => {
     if (repoId === "none" && mcp.length) setAllowMcp(true);
   }, [repoId, mcp.length]);
