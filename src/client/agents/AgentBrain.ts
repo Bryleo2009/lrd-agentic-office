@@ -225,12 +225,15 @@ export class AgentBrain {
               continue;
             }
           }
+          // Mientras caminaba, el usuario pudo haberle hecho clic (y el aviso ya no aplica).
+          const text = this.calling;
+          if (!text) continue;
           this.e.face(1);
           this.e.setAction("wave");
           this.e.renderer.setTone("success");
           if (this.clock - this.lastCallSay > 7) {
             this.lastCallSay = this.clock;
-            this.e.say(this.calling, "success", 5);
+            this.e.say(text, "success", 5);
           }
         }
         await this.e.wait(0.3, token);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentId } from "../../shared/types";
 import { AgentDrawer } from "../drawers/AgentDrawer";
+import { ChatWindow } from "../drawers/ChatWindow";
 import { MissionVisualController } from "../office/MissionVisualController";
 import { OfficeEngine } from "../office/OfficeEngine";
 import { BottomFeed } from "../panels/BottomFeed";
@@ -107,7 +108,7 @@ export function App() {
       ackReport(id);
       st.removePendingReport(id);
     }
-    st.setDrawerTab("chat");
+    st.setChatWindow("atlas");
     engine?.entity("atlas")?.say("¡Te cuento cómo nos fue!", "talk", 3.5);
   }, [selected, pendingReports, engine]);
 
@@ -144,6 +145,9 @@ export function App() {
       </ErrorBoundary>
       <ErrorBoundary name="el panel del agente">
         <AgentDrawer engine={engine} onChatSent={(id) => visualRef.current?.onChatSent(id)} />
+      </ErrorBoundary>
+      <ErrorBoundary name="el chat">
+        <ChatWindow onChatSent={(id) => visualRef.current?.onChatSent(id)} onFocusAgent={focusAgent} />
       </ErrorBoundary>
       <ErrorBoundary name="la actividad">
         <BottomFeed onAgent={focusAgent} />

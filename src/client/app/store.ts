@@ -33,6 +33,8 @@ interface State {
   pendingReports: string[];
   /** Pestaña que el panel del agente debe abrir (se consume al aplicarse). */
   drawerTab: "activity" | "chat" | "terminal" | "profile" | null;
+  /** Agente cuyo chat está abierto en la ventana flotante. */
+  chatWindow: AgentId | null;
 
   hydrate(s: Snapshot): void;
   addEvent(e: AgentRuntimeEvent): void;
@@ -51,6 +53,7 @@ interface State {
   showToast(text: string, tone?: "error" | "info"): void;
   removePendingReport(id: string): void;
   setDrawerTab(t: State["drawerTab"]): void;
+  setChatWindow(id: AgentId | null): void;
 }
 
 const MAX_EVENTS = 600;
@@ -74,6 +77,7 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   pendingReports: [],
   drawerTab: null,
+  chatWindow: null,
 
   hydrate(s) {
     const missions: Record<string, Mission> = {};
@@ -127,6 +131,9 @@ export const useStore = create<State>((set, get) => ({
   },
   setDrawerTab(drawerTab) {
     set({ drawerTab });
+  },
+  setChatWindow(chatWindow) {
+    set({ chatWindow });
   },
   setRuntime(runtime) {
     set({ runtime });

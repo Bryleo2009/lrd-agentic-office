@@ -7,6 +7,7 @@ import { branchesOf, eventTone, isLive, repoLabel, timeOf } from "../app/format"
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
 import { EventRow } from "../panels/BottomFeed";
+import { RichText } from "./RichText";
 
 type Tab = "activity" | "chat" | "terminal" | "profile";
 
@@ -40,6 +41,8 @@ export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | nul
   useStore((s) => s.team);
   const select = useStore((s) => s.select);
   const [tab, setTab] = useState<Tab>("activity");
+  const chatWindow = useStore((s) => s.chatWindow);
+  const setChatWindow = useStore((s) => s.setChatWindow);
   const drawerTab = useStore((s) => s.drawerTab);
   useEffect(() => {
     if (!drawerTab) return;
@@ -106,7 +109,24 @@ export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | nul
       </div>
       <div className="drawer-body">
         {tab === "activity" && <ActivityTab agentId={selected} />}
-        {tab === "chat" && <ChatTab agentId={selected} onSent={onChatSent} />}
+        {tab === "chat" &&
+          (chatWindow === selected ? (
+            <div className="empty chat-moved">
+              La conversación con {a.name} está abierta en su ventana.
+              <button className="btn" onClick={() => setChatWindow(null)}>
+                Traerla aquí
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="chat-popout">
+                <button className="link" onClick={() => setChatWindow(selected)}>
+                  ↗ Abrir en ventana
+                </button>
+              </div>
+              <ChatView agentId={selected} onSent={onChatSent} />
+            </>
+          ))}
         {tab === "terminal" && <TerminalTab agentId={selected} />}
         {tab === "profile" && <ProfileTab agentId={selected} />}
       </div>
@@ -169,7 +189,8 @@ function ActivityTab({ agentId }: { agentId: AgentId }) {
   );
 }
 
-function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) => void }) {
+/** Conversación con un agente (se usa en la ficha y en la ventana de chat). */
+export function ChatView({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) => void }) {
   const chats = useStore((s) => s.chats[agentId]) ?? [];
   const busy = useStore((s) => s.chatBusy[agentId]);
   const push = useStore((s) => s.pushChat);
@@ -215,7 +236,7 @@ function ChatTab({ agentId, onSent }: { agentId: AgentId; onSent: (id: AgentId) 
         )}
         {chats.map((c) => (
           <div key={c.id} className={`msg ${c.from}`}>
-            {c.text}
+            {c.from === "agent" ? <RichText text={c.text} /> : c.text}
           </div>
         ))}
         {busy && <div className="msg agent typing">…</div>}
