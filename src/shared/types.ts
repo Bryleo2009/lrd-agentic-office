@@ -49,6 +49,11 @@ export interface AgentProfile extends AgentDefinition {
   customized: boolean;
 }
 
+/** Servidores que son herramientas de ejecución (no fuentes de datos): no se preseleccionan. */
+export function isToolMcp(name: string): boolean {
+  return /repl|^codex_app$|computer|cua|browser|playwright|shell|terminal/i.test(name);
+}
+
 export interface McpServerInfo {
   name: string;
   enabled: boolean;
@@ -114,6 +119,8 @@ export interface Mission {
   repoSelection: "manual" | "auto";
   /** Si los agentes pueden usar los servidores MCP (datos reales, sólo lectura). */
   allowMcp: boolean;
+  /** Servidores MCP habilitados para esta misión (el resto queda desactivado). */
+  mcpServers: string[];
   baseBranch: string;
   engine: EngineChoice;
   provider: Provider;

@@ -58,9 +58,9 @@ app.get("/api/missions/:id", async (req, reply) => {
 app.get("/api/missions/:id/events", async (req) => repo.missionEvents((req.params as { id: string }).id));
 
 app.post("/api/missions", async (req) => {
-  const b = (req.body ?? {}) as { prompt?: string; repositoryId?: string | null; baseBranch?: string | null; engine?: EngineChoice; allowMcp?: boolean };
+  const b = (req.body ?? {}) as { prompt?: string; repositoryId?: string | null; baseBranch?: string | null; engine?: EngineChoice; allowMcp?: boolean; mcpServers?: string[] };
   const engine: EngineChoice = b.engine === "codex" || b.engine === "claude" ? b.engine : "auto";
-  return orchestrator.createMission({ prompt: b.prompt ?? "", repositoryId: b.repositoryId ?? "auto", baseBranch: b.baseBranch || null, engine, allowMcp: !!b.allowMcp });
+  return orchestrator.createMission({ prompt: b.prompt ?? "", repositoryId: b.repositoryId ?? "auto", baseBranch: b.baseBranch || null, engine, allowMcp: !!b.allowMcp, mcpServers: Array.isArray(b.mcpServers) ? b.mcpServers.map(String) : undefined });
 });
 
 app.post("/api/missions/:id/cancel", async (req) => {

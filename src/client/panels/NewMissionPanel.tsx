@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { EngineChoice } from "../../shared/types";
+import { isToolMcp, type EngineChoice } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 
@@ -21,6 +21,7 @@ export function NewMissionPanel() {
   const [repoId, setRepoId] = useState("auto");
   const [base, setBase] = useState("");
   const [allowMcp, setAllowMcp] = useState(false);
+  const [mcpSel, setMcpSel] = useState<string[] | null>(null);
   const [engine, setEngine] = useState<EngineChoice>("auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +35,9 @@ export function NewMissionPanel() {
   useEffect(() => {
     if (repoId === "none" && mcp.length) setAllowMcp(true);
   }, [repoId, mcp.length]);
+  // Por defecto sólo fuentes de datos (p. ej. "lrd"); herramientas como node_repl/cua_repl quedan apagadas.
+  const selected = mcpSel ?? mcp.map((m) => m.name).filter((n) => !isToolMcp(n));
+  const toggle = (n: string) => setMcpSel(selected.includes(n) ? selected.filter((x) => x !== n) : [...selected, n]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -55,7 +59,7 @@ export function NewMissionPanel() {
     setBusy(true);
     setError(null);
     try {
-      await api.createMission({ prompt: prompt.trim(), repositoryId: repoId, baseBranch: base || null, engine, allowMcp: allowMcp && mcp.length > 0 });
+      await api.createMission({ prompt: prompt.trim(), repositoryId: repoId, baseBranch: base || null, engine, allowMcp: allowMcp && selected.length > 0, mcpServers: selected });
       setPrompt("");
       setOpen(false);
       toast("Misión creada: el equipo se pone en marcha", "info");
@@ -130,12 +134,26 @@ export function NewMissionPanel() {
           </label>
         </div>
         {mcp.length > 0 && (
-          <label className="check mcp-check">
-            <input type="checkbox" checked={allowMcp} onChange={(e) => setAllowMcp(e.target.checked)} />
-            <span>
-              Usar datos reales vía MCP <b>(solo lectura)</b>: {mcp.map((m) => m.name).join(", ")}
-            </span>
-          </label>
+          <div className="mcp-check">
+            <label className="check">
+              <input type="checkbox" checked={allowMcp} onChange={(e) => setAllowMcp(e.target.checked)} />
+              <span>
+                Usar datos reales vía MCP <b>(solo lectura)</b>
+              </span>
+            </label>
+            {allowMcp && (
+              <div className="mcp-list">
+                {mcp.map((m) => (
+                  <button key={m.name} type="button" className={`chip ${selected.includes(m.name) ? "on" : ""}`} onClick={() => toggle(m.name)} title={isToolMcp(m.name) ? "Herramienta de ejecución, no fuente de datos" : "Fuente de datos"}>
+                    {selected.includes(m.name) ? "✓ " : ""}
+                    {m.name}
+                    {isToolMcp(m.name) ? " · herramienta" : ""}
+                  </button>
+                ))}
+                {!selected.length && <span className="warn-text">Elige al menos un servidor</span>}
+              </div>
+            )}
+          </div>
         )}
         <div className="fineprint">
           {repoId === "auto" && <>Repositorio y rama son opcionales: si los dejas en automático, Atlas elige según la misión (o trabaja sin repo si es de datos). </>}
@@ -149,7 +167,7 @@ export function NewMissionPanel() {
           <button className="btn ghost" onClick={() => setOpen(false)}>
             Cancelar
           </button>
-          <button className="btn primary" disabled={busy || !prompt.trim() || !repo} onClick={submit}>
+          <button className="btn primary" disabled={busy || !prompt.trim()} onClick={submit}>
             {busy ? "Creando…" : "Lanzar misión"}
           </button>
         </div>

@@ -1305,3 +1305,16 @@ label.check input {
     padding: 14px 12px 0;
   }
 }
+
+.mcp-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
+}
+.chip.on {
+  border-color: rgba(34, 211, 238, 0.6);
+  background: rgba(34, 211, 238, 0.14);
+  color: #cffafe;
+}

@@ -2,7 +2,7 @@ import { customAlphabet } from "nanoid";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import fs from "node:fs";
 import path from "node:path";
-import { NO_REPO, type AgentId, type EngineChoice, type Mission, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
+import { isToolMcp, NO_REPO, type AgentId, type EngineChoice, type Mission, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
 import { config, loadRepositories, paths } from "../config";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
@@ -30,6 +30,8 @@ export interface CreateMissionInput {
   engine?: EngineChoice;
   /** Permitir datos reales vía MCP (sólo lectura). */
   allowMcp?: boolean;
+  /** Qué servidores MCP habilitar (por defecto, los que son fuentes de datos). */
+  mcpServers?: string[];
 }
 
 interface MissionRuntime {
@@ -105,7 +107,9 @@ export class AgentOrchestrator {
       throw new MissionError(`${st?.label ?? provider} no disponible: ${st?.message ?? "sin detalle"}. No se usará API como alternativa.`, 409);
     }
     const mcp = this.mcpNames(provider);
-    const allowMcp = !!input.allowMcp && mcp.length > 0;
+    const wanted = Array.isArray(input.mcpServers) ? input.mcpServers.filter((n) => mcp.includes(n)) : mcp.filter((n) => !isToolMcp(n));
+    const mcpServers = input.allowMcp ? wanted : [];
+    const allowMcp = mcpServers.length > 0;
     const requested = (input.repositoryId ?? "").trim();
     const repoSelection: Mission["repoSelection"] = requested && requested !== "auto" ? "manual" : "auto";
     let repoReason = "";
@@ -127,6 +131,7 @@ export class AgentOrchestrator {
       repositoryId: r?.id ?? NO_REPO,
       repoSelection,
       allowMcp,
+      mcpServers,
       baseBranch: base,
       engine,
       provider,
@@ -155,7 +160,7 @@ export class AgentOrchestrator {
         detail: `Selección automática: ${repoReason}.`,
         status: "info",
       });
-    if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcp.join(", ")} (sólo lectura)`, status: "warning" });
+    if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcpServers.join(", ")} (sólo lectura)`, status: "warning" });
     this.pushMission(id);
     const rt: MissionRuntime = { cancelled: false, qaSignal: { cancelled: false }, lastWriter: null };
     this.active.set(id, rt);
@@ -347,7 +352,7 @@ export class AgentOrchestrator {
     const provider = runtime.forAgent("atlas", mission.provider, mission.engine);
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     this.emit(id, "atlas", { provider, sessionId: null, type: "AGENT_STATUS", title: "Planificando la misión", status: "running", metadata: { visual: "THINKING" } });
-    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.allowMcp ? this.mcpNames(provider) : []), "Planificar", rt, step);
+    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers), "Planificar", rt, step);
     if (!res.ok) {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
       throw new MissionError(`Atlas no pudo planificar: ${res.error}`);
@@ -422,7 +427,7 @@ export class AgentOrchestrator {
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${m.repositoryId === NO_REPO ? "Misión sin repositorio (análisis / datos)." : `Repositorio: ${m.repositoryId} · rama de trabajo ${m.branch} (base ${m.baseBranch}).`}${m.allowMcp ? mcpRules(this.mcpNames(m.provider)) : ""}
+${m.repositoryId === NO_REPO ? "Misión sin repositorio (análisis / datos)." : `Repositorio: ${m.repositoryId} · rama de trabajo ${m.branch} (base ${m.baseBranch}).`}${m.allowMcp ? mcpRules(m.mcpServers) : ""}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -447,7 +452,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
   ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     let entry;
     try {
-      entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission, allowMcp: !!repo.getMission(missionId)?.allowMcp });
+      entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission, mcpAllow: repo.getMission(missionId)?.mcpServers ?? [] });
     } catch (e) {
       const msg = (e as Error).message;
       this.emit(missionId, agentId, { provider, sessionId: null, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} bloqueado`, detail: msg, status: "error" });
@@ -643,7 +648,7 @@ No modifiques archivos. Responde en español, conciso (máx. 15 líneas). Termin
     if (noRepoCwd) fs.mkdirSync(noRepoCwd, { recursive: true });
     const cwd = mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
     const mid = mission?.id ?? null;
-    const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", allowMcp: !!mission?.allowMcp }));
+    const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", mcpAllow: mission?.mcpServers ?? [] }));
     if (entry.busy) throw new MissionError(`${getAgent(agentId).name} está respondiendo otro mensaje`, 409);
     entry.session.config.permission = "read-only";
 

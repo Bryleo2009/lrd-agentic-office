@@ -12,8 +12,8 @@ export interface SessionConfig {
   /** Carpeta donde se guarda stdout crudo del CLI (auditoría). */
   runDir: string;
   timeoutMs: number;
-  /** Permite usar los servidores MCP configurados en el CLI (datos reales). */
-  allowMcp: boolean;
+  /** Servidores MCP permitidos (datos reales). Vacío = ninguno. */
+  mcpAllow: string[];
 }
 
 /** Metadata de sesión. Nunca contiene credenciales. */

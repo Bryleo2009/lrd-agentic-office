@@ -9,7 +9,7 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  createMission: (b: { prompt: string; repositoryId: string; baseBranch: string | null; engine: EngineChoice; allowMcp: boolean }) =>
+  createMission: (b: { prompt: string; repositoryId: string; baseBranch: string | null; engine: EngineChoice; allowMcp: boolean; mcpServers?: string[] }) =>
     req<Mission>("/api/missions", { method: "POST", body: JSON.stringify(b) }),
   cancelMission: (id: string) => req<{ ok: true }>(`/api/missions/${id}/cancel`, { method: "POST", body: "{}" }),
   chat: (agentId: AgentId, message: string, missionId?: string | null) =>

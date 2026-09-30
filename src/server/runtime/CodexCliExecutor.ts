@@ -98,8 +98,8 @@ export class CodexCliExecutor extends BaseCliExecutor {
 
   /** Desactiva los MCP para esta invocación si la misión no los permite. */
   private mcpArgs(session: AgentSession): string[] {
-    if (session.config.allowMcp) return [];
-    return (this.status?.mcpServers ?? []).filter((m) => m.enabled && /^[\w-]+$/.test(m.name)).flatMap((m) => ["-c", `mcp_servers.${m.name}.enabled=false`]);
+    const allow = new Set(session.config.mcpAllow);
+    return (this.status?.mcpServers ?? []).filter((m) => m.enabled && !allow.has(m.name) && /^[\w-]+$/.test(m.name)).flatMap((m) => ["-c", `mcp_servers.${m.name}.enabled=false`]);
   }
 
   private save(st: RuntimeStatus): RuntimeStatus {

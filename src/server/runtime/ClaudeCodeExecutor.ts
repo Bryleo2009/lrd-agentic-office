@@ -163,10 +163,10 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
     }
     const ro = session.config.permission === "read-only";
     if (caps.permissionMode) a.push("--permission-mode", ro ? "default" : "acceptEdits");
-    const mcpTools = session.config.allowMcp ? (this.status?.mcpServers ?? []).map((m) => `mcp__${m.name}`) : [];
+    const mcpTools = session.config.mcpAllow.map((n) => `mcp__${n}`);
     if (caps.allowedTools) a.push("--allowedTools", ...(ro ? READ_ONLY_TOOLS : WRITE_TOOLS), ...mcpTools);
     // Sin permiso de datos: no se carga ningún servidor MCP.
-    if (!session.config.allowMcp && caps.strictMcp) a.push("--strict-mcp-config");
+    if (!session.config.mcpAllow.length && caps.strictMcp) a.push("--strict-mcp-config");
     if (caps.disallowedTools) a.push("--disallowedTools", ...(ro ? [...READ_ONLY_DENY, ...ALWAYS_DENY] : ALWAYS_DENY));
     if (appendSystem && caps.appendSystemPrompt) a.push("--append-system-prompt", appendSystem);
     return a;

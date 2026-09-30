@@ -5,14 +5,24 @@ import { db, schema } from "./db";
 
 const now = () => new Date().toISOString();
 
+function safeList(v: unknown): string[] {
+  try {
+    const j = JSON.parse(String(v ?? "[]"));
+    return Array.isArray(j) ? j.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 // ---------- missions ----------
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
-  db.insert(schema.missions).values(row).run();
+  db.insert(schema.missions).values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []) }).run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  db.update(schema.missions).set({ ...patch, updatedAt: now() }).where(eq(schema.missions.id, id)).run();
+  const { mcpServers, ...rest } = patch;
+  db.update(schema.missions).set({ ...rest, ...(mcpServers ? { mcpServers: JSON.stringify(mcpServers) } : {}), updatedAt: now() }).where(eq(schema.missions.id, id)).run();
 }
 
 function rowToStep(r: typeof schema.missionSteps.$inferSelect): MissionStep {
@@ -45,7 +55,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {
