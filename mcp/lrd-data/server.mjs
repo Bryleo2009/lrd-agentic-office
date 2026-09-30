@@ -331,7 +331,8 @@ async function handle(msg) {
 
 if (process.env.LRD_MCP_NO_STDIO !== "1") {
   if (!targetNames.length) log(`Sin entornos configurados: crea ${CONFIG_FILE} (ver mcp/lrd-data/README.md).`);
-  else log(`Entornos: ${targetNames.join(", ")}${only ? ` (fijo: ${only})` : ""}`);
+  else log(`Archivo: ${CONFIG_FILE} · entornos: ${targetNames.join(", ")}${only ? ` (fijo: ${only})` : ""}`);
+  const inflight = new Set();
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on("line", (line) => {
     if (!line.trim()) return;
@@ -341,7 +342,12 @@ if (process.env.LRD_MCP_NO_STDIO !== "1") {
     } catch {
       return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "JSON inválido" } });
     }
-    for (const m of Array.isArray(msg) ? msg : [msg]) void handle(m).catch((e) => log(e.stack ?? e.message));
+    for (const m of Array.isArray(msg) ? msg : [msg]) {
+      const p = handle(m).catch((e) => log(e.stack ?? e.message));
+      inflight.add(p);
+      void p.finally(() => inflight.delete(p));
+    }
   });
-  rl.on("close", () => process.exit(0));
+  // Al cerrarse la entrada (p. ej. una prueba con "|"), se responden las llamadas pendientes antes de salir.
+  rl.on("close", () => void Promise.allSettled([...inflight]).then(() => process.exit(0)));
 }
