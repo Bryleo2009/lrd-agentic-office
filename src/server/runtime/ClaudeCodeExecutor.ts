@@ -40,6 +40,13 @@ const READ_ONLY_TOOLS = [
   "Bash(php artisan test:*)",
   "Bash(vendor/bin/phpunit:*)",
   "Bash(composer validate:*)",
+  // Chequeos propios de lrd-back / lrd-front (los mismos que corre QA)
+  "Bash(bash scripts/check-backend:*)",
+  "Bash(bash scripts/pint-changed:*)",
+  "Bash(bash scripts/migrate-ci:*)",
+  "Bash(php artisan optimize:clear:*)",
+  "Bash(npm run check-frontend:*)",
+  "Bash(npm run type-check:*)",
   // Diagnóstico de entorno y sintaxis (no modifican archivos)
   "Bash(php -v)",
   "Bash(php --version)",

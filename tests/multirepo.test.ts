@@ -30,7 +30,8 @@ fs.writeFileSync(
   path.join(root, "repos.json"),
   JSON.stringify({
     repositories: [
-      { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
+      { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2",
+        qaStages: [["npm run build", "npm test"], [slow("after")]] },
       { id: "lrd-front", name: "lrd-front", github: "x/lrd-front", cloneUrl: front, shortName: "front", kind: "frontend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
     ],
     protectedBranches: ["main", "release/fase2"],
@@ -78,6 +79,8 @@ test("misión back + front: Diego y Mica en paralelo, QA en carriles paralelos, 
   const qb = q.find((x) => x.tag === "build")!;
   const qt = q.find((x) => x.tag === "test")!;
   assert.ok(qb && qt && qb.start < qt.end && qt.start < qb.end, "build y test del back en paralelo");
+  const qa2 = q.find((x) => x.tag === "after")!;
+  assert.ok(qa2 && qa2.start >= Math.max(qb.end, qt.end) - 50, "la etapa 2 empieza cuando termina la etapa 1");
 
   // Una rama publicada en cada repositorio.
   assert.equal(m.repos.filter((r) => r.pushed && r.branch?.startsWith("agentic/")).length, 2);

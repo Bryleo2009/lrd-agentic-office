@@ -168,6 +168,13 @@ export interface RepositoryConfig {
   defaultBase: string;
   /** Comandos de QA explícitos. Si faltan, se autodetectan. */
   qaCommands?: string[];
+  /**
+   * QA por etapas: las etapas van en orden y los comandos de cada etapa corren en paralelo.
+   * Tiene prioridad sobre qaCommands. Ej.: [["composer validate --strict", "bash scripts/pint-changed"], ["php artisan test"]]
+   */
+  qaStages?: string[][];
+  /** Comando único de verificación del repo que los agentes pueden correr tras sus cambios (p. ej. "npm run check-frontend"). */
+  checkCommand?: string;
   installCommand?: string | null;
   kind?: "frontend" | "backend" | "other";
   /** Palabras que ayudan a elegir este repo en modo Automático. */

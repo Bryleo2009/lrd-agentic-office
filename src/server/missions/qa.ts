@@ -7,7 +7,10 @@ import { summarizeOutput } from "../runtime/parsers/common";
 
 export interface QaPlan {
   setup: string[];
+  /** Todos los comandos (para mostrar). */
   commands: string[];
+  /** Etapas en orden; los comandos de una etapa corren en paralelo. */
+  stages: string[][];
   note: string | null;
 }
 
@@ -39,7 +42,11 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
   if (fs.existsSync(path.join(wt, "composer.json")) && !fs.existsSync(path.join(wt, "vendor"))) {
     setup.push("composer install --no-interaction --prefer-dist");
   }
-  if (repo.qaCommands?.length) return { setup, commands: repo.qaCommands, note: null };
+  // "php artisan test" configurado a mano también aprovecha ParaTest si está instalado.
+  const par = (c: string) => (c.trim() === "php artisan test" && hasParatest(wt) ? "php artisan test --parallel" : c);
+  const stages = repo.qaStages?.map((s) => s.filter(Boolean).map(par)).filter((s) => s.length);
+  if (stages?.length) return { setup, commands: stages.flat(), stages, note: null };
+  if (repo.qaCommands?.length) return { setup, commands: repo.qaCommands, stages: [repo.qaCommands], note: null };
 
   if (fs.existsSync(pkgPath)) {
     try {
@@ -54,7 +61,7 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
   // Con ParaTest instalado, Laravel reparte las pruebas en varios procesos (cada uno con su propia BD de prueba).
   if (fs.existsSync(path.join(wt, "artisan"))) commands.push(hasParatest(wt) ? "php artisan test --parallel" : "php artisan test");
   else if (fs.existsSync(path.join(wt, "vendor", "bin", "phpunit")) || fs.existsSync(path.join(wt, "phpunit.xml"))) commands.push("vendor/bin/phpunit");
-  return { setup, commands, note: commands.length ? null : "No se detectaron comandos de build/test en el repositorio" };
+  return { setup, commands, stages: commands.length ? [commands] : [], note: commands.length ? null : "No se detectaron comandos de build/test en el repositorio" };
 }
 
 export interface CommandResult {
@@ -63,6 +70,22 @@ export interface CommandResult {
   output: string;
   summary: string;
   durationMs: number;
+}
+
+/**
+ * En Windows, `bash scripts/...` necesita el bash de Git: el de System32 es WSL (otro sistema)
+ * y a menudo Git Bash no está en el PATH. Se usa la ruta de Git for Windows si existe.
+ */
+export function resolveShellCommand(cmd: string, platform = process.platform, exists = fs.existsSync): string {
+  if (platform !== "win32" || !/^bash(\.exe)?\s/i.test(cmd)) return cmd;
+  const candidates = [
+    process.env.GIT_BASH,
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+    process.env.LOCALAPPDATA ? path.win32.join(process.env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe") : undefined,
+  ].filter((c): c is string => !!c);
+  const bash = candidates.find((c) => exists(c));
+  return bash ? cmd.replace(/^bash(\.exe)?/i, `"${bash}"`) : cmd;
 }
 
 /** Ejecuta un comando real con streaming (shell). */
@@ -75,7 +98,7 @@ export function runShell(
   const t0 = Date.now();
   return new Promise((resolve) => {
     let output = "";
-    const child = spawn(command, {
+    const child = spawn(resolveShellCommand(command), {
       cwd,
       shell: true,
       env: childEnv({ CI: "true" }),

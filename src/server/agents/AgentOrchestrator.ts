@@ -519,8 +519,9 @@ export class AgentOrchestrator {
     const ctx = inbound.length
       ? `\n\nContexto real entregado por tu equipo:\n${inbound.map((h) => `--- De ${getAgent(h.from).name} ---\n${h.payload.slice(0, 12000)}`).join("\n\n")}`
       : "";
+    const check = w?.cfg.checkCommand;
     const writes = step.writes
-      ? "Puedes modificar archivos del repositorio para cumplir la tarea. Haz cambios mínimos y correctos. Si hay un comando rápido de verificación, ejecútalo."
+      ? `Puedes modificar archivos del repositorio para cumplir la tarea. Haz cambios mínimos y correctos. ${check ? `Para verificar, el repositorio tiene su propio chequeo: \`${check}\` (es el mismo que corre QA); ejecútalo o la parte relevante.` : "Si hay un comando rápido de verificación, ejecútalo."}`
       : "NO modifiques archivos: solo investiga y reporta con evidencia (rutas, líneas, fragmentos breves).";
     return `${a.systemBrief}
 
@@ -621,12 +622,25 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
           return;
         }
       }
-      // Build, lint y pruebas a la vez (hasta QA_PARALLEL carriles). Se reportan TODAS las fallas juntas.
-      const lanes = Math.max(1, Math.min(config.qaParallel, qa.commands.length));
-      if (lanes > 1)
-        this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_STATUS", title: `QA en paralelo${tag}: ${qa.commands.length} comandos en ${lanes} carriles`, detail: qa.commands.map((c, i) => `Carril ${(i % lanes) + 1}: ${c}`).join("\n"), status: "info", metadata: { lanes } });
-      const results = await mapLimit(qa.commands, lanes, (cmd, i) => this.qaCommand(id, wt, cmd, rt, true, lanes > 1 ? (i % lanes) + 1 : undefined));
-      if (rt.cancelled) return;
+      // Etapas en orden; dentro de cada etapa, comandos a la vez (hasta QA_PARALLEL carriles).
+      // Se corren todas las etapas y se reportan TODAS las fallas juntas.
+      const maxLanes = Math.max(...qa.stages.map((s) => Math.min(config.qaParallel, s.length)));
+      if (maxLanes > 1 || qa.stages.length > 1)
+        this.emit(id, "vega", {
+          provider: "qa",
+          sessionId: null,
+          type: "AGENT_STATUS",
+          title: `QA${tag}: ${qa.commands.length} comandos en ${qa.stages.length} etapa(s), hasta ${maxLanes} a la vez`,
+          detail: qa.stages.map((s, i) => `Etapa ${i + 1}${s.length > 1 ? " (en paralelo)" : ""}:\n${s.map((c) => `  • ${c}`).join("\n")}`).join("\n"),
+          status: "info",
+          metadata: { lanes: maxLanes, stages: qa.stages.length },
+        });
+      const results = [];
+      for (const stage of qa.stages) {
+        const lanes = Math.max(1, Math.min(config.qaParallel, stage.length));
+        results.push(...(await mapLimit(stage, lanes, (cmd, i) => this.qaCommand(id, wt, cmd, rt, true, lanes > 1 ? (i % lanes) + 1 : undefined))));
+        if (rt.cancelled) return;
+      }
       const failures = results.filter((res) => res.exitCode !== 0).map((res) => ({ cmd: res.command, out: res.output.slice(-8000) }));
       if (!failures.length) {
         this.setStep(id, step, { status: "done", result: `QA OK: ${qa.commands.join(" · ")}`, finishedAt: new Date().toISOString() });

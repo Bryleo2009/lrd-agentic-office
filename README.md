@@ -105,7 +105,15 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 
 Repositorios en `config/repositories.json` (ya incluye `lrd-back`, `lrd-front` y, deshabilitados,
 `OfSystem`, `erp-ofsystem-back`, `erp-ofsystem-front`, `lrd-deploy-scripts`). Para habilitar uno: `"enabled": true`.
-Puedes fijar `qaCommands` (p. ej. `["npm run build"]`) o dejar que se autodetecten.
+Puedes fijar `qaCommands` (p. ej. `["npm run build"]`) o dejar que se autodetecten. Para controlar el orden usa
+`qaStages`: las etapas van en orden y los comandos de cada etapa corren en paralelo. `checkCommand` es el chequeo
+único del repo que los agentes usan para verificar sus cambios. Configuración actual:
+
+- **lrd-back** (`bash scripts/check-backend`): etapa 1 en paralelo `composer validate --strict` · `bash scripts/pint-changed`
+  · `php artisan optimize:clear` → etapa 2 `bash scripts/migrate-ci` → etapa 3 `php artisan test` (con `--parallel` si hay ParaTest).
+- **lrd-front** (`npm run check-frontend`): en paralelo `npm run lint:check` · `npm run type-check` · `npm run test` · `npm run build`.
+
+En Windows, `bash scripts/...` usa el bash de Git for Windows (`C:\Program Files\Git\bin\bash.exe`, o la ruta en `GIT_BASH`).
 
 ## Seguridad
 

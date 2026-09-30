@@ -238,3 +238,21 @@ test("DAG: pasos que editan repos distintos corren en paralelo; en el mismo repo
   assert.ok(overlap("a", "b"), "back y front a la vez");
   assert.ok(!overlap("a", "c"), "dos ediciones del mismo repo no se pisan");
 });
+
+test("QA por etapas y bash de Git en Windows", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { detectQa, resolveShellCommand } = await import("../src/server/missions/qa");
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "qa-"));
+  fs.writeFileSync(path.join(wt, "composer.json"), '{"require-dev":{"brianium/paratest":"^7"}}');
+  fs.mkdirSync(path.join(wt, "vendor"));
+  const plan = detectQa(wt, { ...repo, qaStages: [["composer validate --strict", "bash scripts/pint-changed"], ["bash scripts/migrate-ci"], ["php artisan test"]] });
+  assert.deepEqual(plan.stages, [["composer validate --strict", "bash scripts/pint-changed"], ["bash scripts/migrate-ci"], ["php artisan test --parallel"]]);
+  assert.equal(plan.commands.length, 4);
+
+  const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+  assert.equal(resolveShellCommand("bash scripts/check-backend", "win32", (p) => p === gitBash), `"${gitBash}" scripts/check-backend`);
+  assert.equal(resolveShellCommand("bash scripts/check-backend", "linux"), "bash scripts/check-backend");
+  assert.equal(resolveShellCommand("npm run build", "win32", () => true), "npm run build");
+});
