@@ -210,3 +210,56 @@ test("chat: pedir un cambio sobre una misión terminada lo aplica en su misma ra
   assert.equal(after.branch, m.branch, "misma rama de la misión");
   assert.match(git(["show", "--stat", "--format=%s", `refs/heads/${m.branch}`], front), /ajuste por chat[\s\S]*chat-change\.txt/);
 });
+
+test("publicar por chat: integra commits remotos nuevos; si un hook bloquea, explica el motivo y 'publica los cambios' reintenta", { timeout: 150_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const { eventBus } = await import("../src/server/events/AgentEventBus");
+  let m = repo.getMission((await orchestrator.createMission({ prompt: "Implementa el badge de origen en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id)!;
+  for (let i = 0; i < 400 && !["done", "failed"].includes(m.status); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    m = repo.getMission(m.id)!;
+  }
+  assert.equal(m.status, "done", m.error ?? "");
+  const notes: string[] = [];
+  const onMsg = (msg: { kind: string; event?: { type: string; agentId: string | null; provider: string; detail: string | null } }) => {
+    const e = msg.event;
+    if (msg.kind === "event" && e && e.type === "AGENT_MESSAGE" && e.agentId === "mica" && e.provider === "system") notes.push(e.detail ?? "");
+  };
+  eventBus.on("message", onMsg);
+  const nextNote = async () => {
+    const n = notes.length;
+    for (let i = 0; i < 300 && notes.length === n; i++) await new Promise((r) => setTimeout(r, 200));
+    return notes[n] ?? "";
+  };
+
+  // 1) Alguien publicó otro commit en la rama de la misión: se integra y se publica igual (sin --force).
+  const other = path.join(root, "otro-dev");
+  git(["clone", "-q", "--branch", m.branch!, front, other], root);
+  fs.writeFileSync(path.join(other, "de-otro-dev.txt"), "x\n");
+  git(["add", "-A"], other);
+  git(["-c", "user.name=o", "-c", "user.email=o@o", "commit", "-qm", "commit de otro dev"], other);
+  git(["push", "-q", "origin", `HEAD:refs/heads/${m.branch}`], other);
+  await orchestrator.chat("mica", "Cambia el color del badge de Rappi", m.id, "codex");
+  assert.match(await nextNote(), /Listo: commit .*\(publicado\)/);
+  const log = git(["log", "--format=%s", `refs/heads/${m.branch}`], front);
+  assert.match(log, /commit de otro dev/);
+  assert.match(log, /ajuste por chat/);
+
+  // 2) Un hook pre-push bloquea: se explica por qué y el commit queda guardado.
+  const hook = path.join(root, "ws", "repos", "lrd-front", ".git", "hooks", "pre-push");
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, "#!/bin/sh\necho 'husky - pre-push hook: lint failed' >&2\nexit 1\n", { mode: 0o755 });
+  await orchestrator.chat("mica", "Cambia el texto del badge OTRO a 'Otro'", m.id, "codex");
+  const blocked = await nextNote();
+  assert.match(blocked, /hook de git del repositorio \(pre-push\) bloqueó la publicación/);
+  assert.match(blocked, /publica los cambios/);
+
+  // 3) Resuelto el hook, "publica los cambios" publica lo pendiente sin despertar al agente.
+  fs.rmSync(hook);
+  await orchestrator.chat("mica", "publica los cambios", m.id, "codex");
+  assert.match(await nextNote(), /Listo: commit .*\(publicado\)/);
+  eventBus.off("message", onMsg);
+  const local = git(["rev-parse", "HEAD"], repo.getMission(m.id)!.worktree!);
+  assert.equal(git(["rev-parse", `refs/heads/${m.branch}`], front), local, "lo publicado es lo último de la carpeta de la misión");
+});

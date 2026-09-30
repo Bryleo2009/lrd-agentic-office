@@ -134,3 +134,21 @@ export function commandExitReason(exit: number | null | undefined): string {
       return "terminó con errores";
   }
 }
+
+/** Explica por qué falló una operación de git (sobre todo el push) y qué hacer. */
+export function explainGitError(message: string, output = ""): Explained {
+  const t = `${message}\n${output}`;
+  if (/non-fast-forward|fetch first|\[rejected\]|updates were rejected/i.test(t))
+    return { title: "GitHub rechazó la publicación: la rama remota tiene commits que tu copia no tiene", hint: "Alguien (u otro intento) publicó en esa rama. La oficina intenta integrarlos sola; si hubo conflicto, revisa la rama o pide el cambio en una misión nueva." };
+  if (/GH006|protected branch|branch is protected/i.test(t))
+    return { title: "GitHub no permite publicar en esa rama (está protegida)", hint: "Usa una rama agentic/… (la oficina nunca publica en ramas protegidas) o revisa las reglas del repositorio." };
+  if (/permission denied \(publickey\)|authentication failed|could not read username|403|not authorized|denied to/i.test(t))
+    return { title: "GitHub rechazó tus credenciales de git", hint: "Comprueba que en esta PC puedes hacer `git push` a ese repositorio (llave SSH o credenciales de Git). Luego pide \"publica los cambios\" en el chat." };
+  if (/pre-push|husky|hook .*(failed|declined)|hook declined/i.test(t))
+    return { title: "Un hook de git del repositorio (pre-push) bloqueó la publicación", hint: `El repo ejecuta verificaciones antes de publicar y alguna falló. ${lastUsefulLine(output) ? `Dijo: "${lastUsefulLine(output)}". ` : ""}Corrígelo (o pídeselo al agente) y vuelve a pedir que publique.` };
+  if (/could not resolve host|unable to access|connection (timed out|refused|reset)|network/i.test(t))
+    return { title: "No hubo conexión con GitHub al publicar", hint: "Revisa tu conexión y pide \"publica los cambios\" en el chat para reintentar." };
+  if (/conflict/i.test(t)) return { title: "Hay conflictos con los cambios que ya estaban en la rama remota", hint: "Resuélvelos en la rama o lanza una misión nueva desde la rama actualizada." };
+  const last = lastUsefulLine(output) || lastUsefulLine(message);
+  return { title: "git no pudo completar la publicación", hint: last ? `Lo último que dijo git: "${last}".` : "Revisa el detalle técnico." };
+}

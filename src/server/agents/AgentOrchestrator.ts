@@ -15,7 +15,8 @@ import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
-import { commandExitReason } from "../runtime/humanize";
+import { commandExitReason, explainGitError } from "../runtime/humanize";
+import { tail as tailText } from "../runtime/processUtils";
 import { runtime } from "../runtime/RuntimeDetector";
 import { messageBus, type Handoff } from "./AgentMessageBus";
 import { sessions } from "./AgentSession";
@@ -347,7 +348,8 @@ export class AgentOrchestrator {
     } catch (e) {
       const err = e as Error;
       const cancelled = rt.cancelled;
-      const detail = err instanceof GitError && err.output ? `${err.message}\n${err.output}` : err.message;
+      const g = err instanceof GitError ? explainGitError(err.message, err.output) : null;
+      const detail = err instanceof GitError ? `${g!.title}. ${g!.hint}\n\n${err.message}${err.output ? `\n${err.output}` : ""}` : err.message;
       this.setMission(id, { status: cancelled ? "cancelled" : "failed", error: cancelled ? "Cancelada por el usuario" : detail });
       const m = repo.getMission(id);
       for (const s of m?.steps ?? []) if (s.status === "pending" || s.status === "running") this.setStep(id, s, { status: "cancelled" });
@@ -478,7 +480,7 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
     const auto = `agentic/${mission.area}/${slugify(mission.prompt)}-${mission.id}`;
     const want = requestedBranch(mission.prompt);
     if (!want || isProtected(want)) return auto;
-    const taken = (await gitManager.remoteBranchExists(w.cfg, want)) || (await gitManager.localBranchExists(w.wt, want));
+    const taken = (await gitManager.remoteHasBranch(w.wt, want)) || (await gitManager.localBranchExists(w.wt, want));
     if (!taken) return want;
     this.emit(mission.id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `La rama ${want} ya existe: se usa ${want}-${mission.id}`, status: "warning" });
     return `${want}-${mission.id}`;
@@ -1069,6 +1071,18 @@ Termina con "RESUMEN:" y una frase corta.`;
     // editar en la carpeta de esa misión y la oficina hace commit en su misma rama, la publica y espera CI.
     const change = mission && mission.repositoryId !== NO_REPO && asksChange(message) ? this.chatChangeTarget(mission, agentId) : null;
     if (change && this.active.has(mission!.id)) throw new MissionError("La misión todavía está en curso: espera a que termine para pedir ajustes por chat.", 409);
+    // "publica los cambios" / "reintenta": solo publicar lo que ya está hecho, sin despertar al agente.
+    if (change && message.length < 80 && /^\s*(por favor\s+)?(publica|vuelve a publicar|reintenta)/i.test(message)) {
+      eventBus.publish({ missionId: mission!.id, agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
+      void this.deliverChatChange(mission!, agentId, change, message)
+        .catch((e) => {
+          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
+          this.chatNote(mission!.id, agentId, g ? `Sigo sin poder publicar: ${g.title}.\n\n${g.hint}\n\nDetalle de git:\n\`\`\`\n${tailText(`${e.message}\n${(e as GitError).output}`, 1500)}\n\`\`\`` : `Sigo sin poder publicar: ${(e as Error).message}`);
+          if (repo.getMission(mission!.id)?.status === "committing") this.setMission(mission!.id, { status: "done" });
+        })
+        .finally(() => eventBus.broadcast({ kind: "chat", agentId, missionId: mission!.id, delta: "", done: true }));
+      return;
+    }
     const cwd = change?.wt ?? mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
     const mid = mission?.id ?? null;
     const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", mcpAllow: mission?.mcpServers ?? [] }));
@@ -1105,7 +1119,18 @@ Termina con "RESUMEN:" y una frase corta.`;
         sessions.sync(entry, err ? "error" : "idle");
         eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
       }
-      if (change && !err) await this.deliverChatChange(mission!, agentId, change, message).catch((e) => this.chatNote(mission!.id, agentId, `No pude publicar el cambio: ${(e as Error).message}`));
+      if (change && !err)
+        await this.deliverChatChange(mission!, agentId, change, message).catch((e) => {
+          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
+          this.chatNote(
+            mission!.id,
+            agentId,
+            g
+              ? `No pude publicar el cambio: ${g.title}.\n\n${g.hint}\n\nEl commit quedó guardado en la carpeta de la misión; cuando esté resuelto, escríbeme "publica los cambios".\n\nDetalle de git:\n\`\`\`\n${tailText(`${e.message}\n${(e as GitError).output}`, 1500)}\n\`\`\``
+              : `No pude publicar el cambio: ${(e as Error).message}`,
+          );
+          if (repo.getMission(mission!.id)?.status === "committing") this.setMission(mission!.id, { status: "done" });
+        });
     })();
   }
 
@@ -1133,7 +1158,10 @@ Termina con "RESUMEN:" y una frase corta.`;
 
   /** Tras un cambio pedido por chat: commit en la rama de la misión, publicación y espera de GitHub Actions. */
   private async deliverChatChange(m: Mission, agentId: AgentId, w: WorkRepo, message: string): Promise<void> {
-    if (!(await gitManager.status(w.wt)).trim()) {
+    // Sin cambios nuevos pero con commits sin publicar (p. ej. un push que falló antes) también se publica.
+    const dirty = (await gitManager.status(w.wt)).trim();
+    const onBranch = (await gitManager.currentBranch(w.wt).catch(() => "HEAD")).startsWith("agentic/");
+    if (!dirty && !onBranch && (await gitManager.aheadOf(w.wt, w.base)) === 0) {
       this.chatNote(m.id, agentId, "No quedaron cambios en la carpeta de la misión, así que no hay nada que publicar.");
       return;
     }

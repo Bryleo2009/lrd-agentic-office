@@ -309,3 +309,11 @@ test("misión real: respeta repo, rama base y nombre de rama pedidos en el texto
   assert.equal(requestedBranch("crea la rama feature/x"), null, "solo ramas agentic/");
   assert.equal(inferRepo("No toques lrd-front; el bug está en la API", [back, front], false).id, "lrd-back");
 });
+
+test("errores de git al publicar: se explica la causa real", async () => {
+  const { explainGitError } = await import("../src/server/runtime/humanize");
+  assert.match(explainGitError("git push falló", " ! [rejected] x -> x (fetch first)\nerror: failed to push some refs").title, /rama remota tiene commits/);
+  assert.match(explainGitError("git push falló", "husky - pre-push hook exited with code 1 (error)\nlint failed").title, /hook de git/);
+  assert.match(explainGitError("git push falló", "git@github.com: Permission denied (publickey).").title, /credenciales/);
+  assert.match(explainGitError("git push falló", "remote: error: GH006: Protected branch update failed").title, /protegida/);
+});

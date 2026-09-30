@@ -174,8 +174,28 @@ export class GitWorktreeManager {
       return branch;
     }
     if (!branch.startsWith("agentic/")) throw new GitError(`Push bloqueado: rama inesperada ${branch}`, "");
-    await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
+    try {
+      await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
+    } catch (e) {
+      const out = e instanceof GitError ? `${e.message}\n${e.output}` : String(e);
+      if (!/non-fast-forward|fetch first|\[rejected\]|updates were rejected/i.test(out)) throw e;
+      // La rama remota avanzó (otro intento o alguien más publicó): se integran esos commits y se reintenta.
+      // Nunca --force: si hay conflicto, se deja todo como estaba y se informa.
+      await git(["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], wt, 5 * 60_000);
+      const r = await run("git", ["-c", "user.name=LRD Agentic Office", "-c", "user.email=agentic-office@localhost", "rebase", `origin/${branch}`], { cwd: wt, timeoutMs: 120_000 });
+      if (r.code !== 0) {
+        await run("git", ["rebase", "--abort"], { cwd: wt, timeoutMs: 60_000 });
+        throw new GitError(`No se pudo publicar ${branch}: la rama remota tiene cambios que chocan con los de la misión (conflicto al integrarlos)`, tail(`${r.stderr}\n${r.stdout}`, 2000));
+      }
+      await git(["push", "-u", "origin", `${branch}:${branch}`], wt, 5 * 60_000);
+    }
     return branch;
+  }
+
+  /** ¿Existe la rama en GitHub? (consulta real al remoto; las referencias locales pueden estar viejas) */
+  async remoteHasBranch(wt: string, branch: string): Promise<boolean> {
+    const out = await git(["ls-remote", "--heads", "origin", `refs/heads/${branch}`], wt, 60_000).catch(() => "");
+    return out.trim().length > 0;
   }
 }
 
