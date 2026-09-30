@@ -30,8 +30,44 @@ export function unwrapShell(cmd: string | string[]): string {
   return s;
 }
 
+/**
+ * Une una palabra de shell hecha de tramos entre comillas, como la que arma Codex en Windows:
+ * '$ErrorActionPreference='"'"'Stop'"'"'; rg -n x' → $ErrorActionPreference='Stop'; rg -n x.
+ * Devuelve null si no es una sola palabra así.
+ */
+function joinQuotedWord(s: string): string | null {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0) return null;
+      out += s.slice(i + 1, j);
+      i = j + 1;
+    } else if (ch === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') {
+        if (s[j] === "\\" && j + 1 < s.length) {
+          out += s[j + 1];
+          j += 2;
+        } else out += s[j++];
+      }
+      if (j >= s.length) return null;
+      i = j + 1;
+    } else if (/\s/.test(ch)) return null;
+    else out += s[i++];
+  }
+  return out;
+}
+
 function stripQuotes(s: string): string {
   const t = s.trim();
+  // Varios tramos entre comillas pegados ('…'"'"'…'): se unen como lo haría el shell.
+  if (/^['"]/.test(t) && /'"'"'|"'"'"/.test(t)) {
+    const joined = joinQuotedWord(t);
+    if (joined !== null) return joined;
+  }
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) return t.slice(1, -1).replace(/\\"/g, '"').replace(/''/g, "'");
   return t;
 }
@@ -41,7 +77,9 @@ function mainCommand(cmd: string): string {
   const parts = cmd
     .split(/\s*(?:&&|;|\|\|)\s*/)
     .map((p) => p.trim())
-    .filter((p) => p && !/^(cd|set-location|sl|pushd|popd|\$env:|export|set)\b/i.test(p));
+    // Preparativos que no son "el comando": cd, variables de entorno y el preámbulo de PowerShell de Codex
+    // ($ErrorActionPreference='Stop', [Console]::OutputEncoding=…, Set-StrictMode…).
+    .filter((p) => p && !/^(cd|set-location|sl|pushd|popd|\$env:|export|set|set-strictmode|chcp)\b|^\$[\w:]+\s*=|^\[[\w.]+\]::\w+\s*=/i.test(p));
   return (parts[0] ?? cmd).split(/\s*\|\s*/)[0].trim();
 }
 

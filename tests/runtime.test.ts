@@ -385,4 +385,10 @@ test("comandos en palabras: desenvuelve pwsh/cmd de Windows y describe qué hace
   assert.equal(describeCommand('cmd.exe /d /s /c "npm run lint:check"'), "Pasando el linter");
   assert.equal(describeCommand("cd front && npm run type-check"), "Verificando los tipos");
   assert.equal(describeCommand("bash scripts/check-backend"), "Corriendo el chequeo completo del back");
+  // Así llega en Windows: pwsh con el preámbulo $ErrorActionPreference y comillas encadenadas '"'"'.
+  const codexWin = `"C:\\Users\\bryle\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe" -Command '$ErrorActionPreference='"'"'Stop'"'"'; rg -n "embudo" src'`;
+  assert.equal(unwrapShell(codexWin), `$ErrorActionPreference='Stop'; rg -n "embudo" src`);
+  assert.equal(describeCommand(codexWin), "Buscando «embudo»");
+  assert.equal(describeCommand(`pwsh -Command '$ErrorActionPreference='"'"'Stop'"'"'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Content -Raw '"'"'C:\\x\\SKILL.md'"'"''`), "Leyendo SKILL.md");
+  assert.equal(describeCommand(`pwsh -Command "$ErrorActionPreference='Stop'; git status --short"`), "Revisando qué archivos cambiaron");
 });
