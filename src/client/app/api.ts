@@ -1,5 +1,5 @@
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, AgentProfile, EngineChoice, Mission, RepositoryConfig, RuntimeStatus } from "../../shared/types";
+import type { AgentId, AgentProfile, EngineChoice, Lesson, Mission, RepositoryConfig, RuntimeStatus } from "../../shared/types";
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -20,5 +20,8 @@ export const api = {
   resetProfile: (id: AgentId) => req<AgentProfile>(`/api/team/${id}/reset`, { method: "POST", body: "{}" }),
   setRepoPath: (id: string, path: string | null) =>
     req<{ status: { ok: boolean; message: string }; repositories: RepositoryConfig[] }>(`/api/repositories/${id}/local-path`, { method: "PUT", body: JSON.stringify({ path }) }),
+  lessons: () => req<Lesson[]>("/api/lessons"),
+  addLesson: (text: string, scope: string) => req<Lesson>("/api/lessons", { method: "POST", body: JSON.stringify({ text, scope }) }),
+  deleteLesson: (id: string) => req<{ ok: boolean }>(`/api/lessons/${id}`, { method: "DELETE", body: "{}" }),
   runtime: (force = false) => req<RuntimeStatus[]>(`/api/runtime${force ? "?force=1" : ""}`),
 };

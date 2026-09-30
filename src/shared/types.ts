@@ -224,3 +224,14 @@ export type WsServerMessage =
   | { kind: "team"; team: AgentProfile[] }
   | { kind: "repositories"; repositories: RepositoryConfig[] }
   | { kind: "chat"; agentId: AgentId; missionId: string | null; delta: string; done: boolean; error?: string };
+
+/** Lección aprendida por el equipo (memoria entre misiones). */
+export interface Lesson {
+  id: string;
+  text: string;
+  scope: string;
+  source: "auto" | "equipo" | "usuario";
+  hits: number;
+  createdAt: string;
+  updatedAt: string;
+}

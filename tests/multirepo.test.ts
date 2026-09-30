@@ -103,3 +103,30 @@ test("misión de un solo repo sigue igual: una rama, un QA, sin lista de repos",
   assert.ok(m.branch?.startsWith("agentic/") && m.pushed && m.commitSha);
   assert.equal(m.steps.filter((s) => s.kind === "qa").length, 1);
 });
+
+test("consulta rápida de datos: un agente, sin plan ni reunión; aprende y la siguiente ya usa la lección", { timeout: 60_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const L = await import("../src/server/missions/lessons");
+  process.env.FAKE_CALLS = path.join(root, "quick-calls.log");
+  const wait = async (id: string) => {
+    let m = repo.getMission(id)!;
+    for (let i = 0; i < 200 && !["done", "failed"].includes(m.status); i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      m = repo.getMission(id)!;
+    }
+    return m;
+  };
+  const m = await wait((await orchestrator.createMission({ prompt: "Dame info sobre el pedido que termina en 201631", repositoryId: "auto", engine: "codex" })).id);
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.equal(m.repositoryId, "none");
+  assert.deepEqual(m.steps.map((s) => s.kind), ["agent"], "sin plan ni revisión");
+  assert.match(m.summary ?? "", /entregado/);
+  assert.doesNotMatch(m.summary ?? "", /LECCIÓN/);
+  assert.ok(L.listLessons().some((l) => /numero_orden/.test(l.text)), "la lección quedó guardada");
+
+  await wait((await orchestrator.createMission({ prompt: "Dame info sobre el pedido que termina en 201632", repositoryId: "auto", engine: "codex" })).id);
+  const calls = fs.readFileSync(process.env.FAKE_CALLS!, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(calls.filter((c) => c.kind === "plan").length, 0, "nunca pasó por la planificación");
+  assert.equal(calls.filter((c) => c.kind === "quick").at(-1).knowsLesson, true, "la segunda consulta recibió la lección");
+});

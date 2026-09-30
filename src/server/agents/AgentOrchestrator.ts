@@ -9,7 +9,8 @@ import { eventBus } from "../events/AgentEventBus";
 import { gitManager, GitError, isProtected, slugify } from "../integrations/git/GitWorktreeManager";
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
-import { buildPlannerPrompt, deliveryPrefs, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
+import { buildPlannerPrompt, deliveryPrefs, isQuickLookup, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
@@ -413,8 +414,31 @@ export class AgentOrchestrator {
     const { failed } = await dag.execute();
     if (rt.cancelled) throw new MissionError("Cancelada");
     if (failed.length) throw new MissionError(`${getAgent(failed[0].agentId).name} no pudo completar "${failed[0].title}": ${failed[0].error ?? "error"}`);
+    // Consulta rápida (sin revisión de Atlas): la respuesta del agente es el resultado de la misión.
+    if (!steps.some((s) => s.kind === "review")) this.setMission(id, { summary: steps.map((s) => s.result ?? "").join("\n\n").slice(0, 20000) });
     this.setMission(id, { status: "done" });
     this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true } });
+  }
+
+  /** Ámbitos de memoria que aplican a la misión: sus repos, "datos" si usa MCP, y "general". */
+  private lessonScopes(m: Mission): string[] {
+    const repos = m.repos.length ? m.repos.map((r) => r.repositoryId) : m.repositoryId === NO_REPO ? [] : [m.repositoryId];
+    return [...repos, ...(m.allowMcp || m.repositoryId === NO_REPO ? ["datos"] : [])];
+  }
+
+  /** Guarda lecciones y avisa en la oficina cuando el equipo aprende algo nuevo. */
+  private learn(missionId: string, agentId: AgentId, texts: string[], scope: string, source: "auto" | "equipo"): void {
+    for (const t of texts.slice(0, 3)) {
+      const l = addLesson(t, scope, source);
+      if (l && l.hits === 1) this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Aprendido: ${firstLine(l.text, 110)}`, detail: l.text, status: "info", metadata: { lesson: l.id } });
+    }
+  }
+
+  /** Separa las líneas "LECCIÓN:" de una respuesta, las guarda y devuelve el texto limpio. */
+  private absorb(missionId: string, agentId: AgentId, text: string, scope: string): string {
+    const { lessons, rest } = extractLessons(text);
+    if (lessons.length) this.learn(missionId, agentId, lessons, scope, "equipo");
+    return rest || text;
   }
 
   /**
@@ -443,6 +467,24 @@ export class AgentOrchestrator {
         status: "info",
       });
       return rest;
+    }
+
+    // Consulta rápida de datos: un solo agente, sin planificación de Atlas ni reunión final.
+    if (noRepo && isQuickLookup(mission.prompt)) {
+      const who: AgentId = ({ rappi: "rafa", pedidosya: "piero", finance: "fiona" } as Record<string, AgentId>)[mission.area] ?? "nora";
+      const step = this.newStep(id, "s1", who, "Consulta rápida", mission.prompt, [], false, "agent");
+      repo.addStep(step, 1);
+      this.setMission(id, { status: "running", planSource: "rules" });
+      this.emit(id, "atlas", {
+        provider: "system",
+        sessionId: null,
+        type: "PLAN_CREATED",
+        title: `Consulta rápida: ${getAgent(who).name}`,
+        detail: `Es una consulta puntual: la responde ${getAgent(who).name} directo con los datos, sin planificación ni reunión.`,
+        status: "success",
+        metadata: { source: "rules", quick: true, noRepo, steps: [{ id: step.id, agent: who, title: step.title, dependsOn: [], kind: "agent", repositoryId: null }] },
+      });
+      return [step];
     }
 
     this.setMission(id, { status: "planning" });
@@ -511,7 +553,7 @@ export class AgentOrchestrator {
     const provider = runtime.forAgent("atlas", mission.provider, mission.engine);
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     this.emit(id, "atlas", { provider, sessionId: null, type: "AGENT_STATUS", title: "Planificando la misión", status: "running", metadata: { visual: "THINKING" } });
-    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi), "Planificar", rt, step);
+    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.mcpServers, multi, lessonsFor(this.lessonScopes(mission))), "Planificar", rt, step);
     if (!res.ok) {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
       throw new MissionError(`Atlas no pudo planificar: ${res.error}`);
@@ -550,7 +592,8 @@ export class AgentOrchestrator {
     const res = await this.runAgent(id, step.agentId, provider, wt, step.writes ? "workspace-write" : "read-only", prompt, step.title, rt, step);
     if (res.ok) {
       if (step.writes && w) rt.lastWriter.set(w.cfg.id, step.agentId);
-      this.setStep(id, step, { status: "done", result: res.text.slice(0, 20000), finishedAt: new Date().toISOString() });
+      const text = this.absorb(id, step.agentId, res.text, w?.cfg.id ?? "datos");
+      this.setStep(id, step, { status: "done", result: text.slice(0, 20000), finishedAt: new Date().toISOString() });
     } else {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
     }
@@ -602,7 +645,7 @@ export class AgentOrchestrator {
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${where}${m.allowMcp ? mcpRules(m.mcpServers) : ""}
+${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${lessonsFor(this.lessonScopes(m))}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -614,6 +657,7 @@ ${writes}${
         : ""
     }
 No hagas git commit/push ni cambies de rama: el orquestador controla Git.
+Si perdiste tiempo en algo evitable (una herramienta que no sirve aquí, un dato difícil de ubicar, un atajo), agrega hasta 2 líneas "LECCIÓN: …" concretas y reutilizables (sin datos personales ni valores de clientes).
 Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" seguida de una frase corta (máx. 12 palabras) de lo que encontraste o hiciste.`;
   }
 
@@ -672,6 +716,12 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
 
   private publishExecutorEvent(missionId: string | null, agentId: AgentId, provider: Provider, sessionId: string | null, ev: ExecutorEvent, step?: MissionStep): AgentRuntimeEvent {
     const { finalText, ...rest } = ev;
+    // Una herramienta de datos que falla se recuerda, para que la próxima vez no se pierda tiempo en ella.
+    const meta = (ev.metadata ?? {}) as { mcp?: boolean };
+    if (missionId && ev.type === "TOOL_FINISHED" && meta.mcp && ev.tool && (ev.status === "error" || /"success"\s*:\s*false/.test(ev.detail ?? ""))) {
+      const l = lessonFromToolFailure(ev.tool, ev.detail ?? "");
+      if (l) this.learn(missionId, agentId, [l], "datos", "auto");
+    }
     // AGENT_FINISHED de un paso intermedio no es el fin de la misión.
     return eventBus.publish({ ...rest, missionId, agentId, provider, sessionId, metadata: { ...(rest.metadata ?? {}), stepId: step?.id ?? null } });
   }
@@ -825,9 +875,11 @@ ${findings.slice(0, 30000)}
 ${inbound.length ? `\nEntregas recibidas: ${inbound.map((h) => `${getAgent(h.from).name}: ${h.title}`).join("; ")}` : ""}
 ${diff.stat ? `\ngit diff --stat:\n${diff.stat}` : ""}${diff.patch ? `\n\nCambios (la misión abarca varios repositorios; tu carpeta es solo el primero, aquí tienes el diff de todos):\n${diff.patch.slice(0, 30000)}` : ""}
 
-No modifiques archivos. Responde en español, conciso (máx. 15 líneas). Termina con "RESUMEN:" y una frase corta.`;
+No modifiques archivos. Responde en español, conciso (máx. 15 líneas).
+Después, si el equipo perdió tiempo en algo evitable (permisos o herramientas que fallaron, exploración innecesaria, pasos de más), agrega hasta 3 líneas "LECCIÓN: …" concretas para hacerlo mejor la próxima vez (sin datos personales).
+Termina con "RESUMEN:" y una frase corta.`;
       const res = await this.runAgent(id, "atlas", provider, wt, "read-only", prompt, step.title, rt, step);
-      if (res.ok) summary = res.text;
+      if (res.ok) summary = this.absorb(id, "atlas", res.text, this.lessonScopes(mission)[0] ?? "general");
       else {
         this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
         return;
@@ -867,7 +919,7 @@ No modifiques archivos. Responde en español, conciso (máx. 15 líneas). Termin
     let prompt = message;
     if (!entry.session.hasTurn) {
       const a = getAgent(agentId);
-      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. No modifiques archivos.\n\n${this.missionContext(mission, agentId)}\n\nMensaje del usuario: ${message}`;
+      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. No modifiques archivos.\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\nMensaje del usuario: ${message}`;
     }
     const exec = runtime.get(provider);
     entry.busy = true;

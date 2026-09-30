@@ -13,7 +13,7 @@ if (a[0] !== "exec") process.exit(0);
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
-  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, pid: process.pid, resumed: input.includes("se interrumpió") }) + "\n");
+  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, pid: process.pid, resumed: input.includes("se interrumpió"), knowsLesson: input.includes("Lecciones de misiones anteriores") }) + "\n");
   const say = (text) => {
     console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
     console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text } }));
@@ -37,6 +37,10 @@ process.stdin.on("end", () => {
       say(`Listo en ${who}.\nRESUMEN: cambio aplicado en ${who}`);
     }, Number(process.env.FAKE_AGENT_MS ?? 1500));
     return;
+  }
+  if (input.includes("Tu tarea (Consulta rápida)")) {
+    log({ kind: "quick" });
+    return say("Pedido 201631: entregado a las 13:05.\nLECCIÓN: Para ubicar un pedido por número busca en numero_orden y correlativo a la vez.\nRESUMEN: pedido encontrado y entregado");
   }
   log({ kind: "review" });
   say("Revisé los cambios de ambos repositorios; todo coherente.\nRESUMEN: back y front listos");

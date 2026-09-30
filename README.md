@@ -57,6 +57,11 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
      **se retoma sola**: lo terminado se conserva (plan, pasos hechos, cambios en el worktree) y solo se repite lo que
      quedó a medias, avisándole al agente para que continúe sin duplicar trabajo. Los procesos de agentes/QA que
      hayan quedado vivos se cierran antes de retomar.
+   - **Consultas rápidas de datos** ("dame info del pedido que termina en 201631", "¿cuántas boletas hoy?"): sin repositorio,
+     sin planificación y sin reunión final; las responde un solo agente directo con los datos.
+   - **El equipo aprende de sus errores**: si una herramienta falla o pierden tiempo en algo evitable, lo anotan como lección
+     (`<workspace>/lessons.json`) y Atlas y los agentes la leen antes de cada misión. Puedes verlas, borrarlas o enseñar las
+     tuyas en *Ajustes → Lo que aprendió*.
 4. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 

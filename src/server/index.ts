@@ -12,6 +12,7 @@ import * as repo from "./database/repo";
 import { eventBus } from "./events/AgentEventBus";
 import { assertApiDisabled } from "./runtime/ApiExecutor";
 import { installShutdownHooks, reapOrphans } from "./runtime/childRegistry";
+import { addLesson, deleteLesson, listLessons } from "./missions/lessons";
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
 import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
@@ -46,6 +47,16 @@ app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
 });
 
 app.get("/api/health", async () => ({ ok: true }));
+
+// Memoria del equipo (lecciones aprendidas)
+app.get("/api/lessons", async () => listLessons());
+app.post("/api/lessons", async (req, reply) => {
+  const b = (req.body ?? {}) as { text?: string; scope?: string };
+  const l = b.text ? addLesson(String(b.text), String(b.scope || "general"), "usuario") : null;
+  if (!l) return reply.code(400).send({ error: "La lección está vacía o es muy corta" });
+  return l;
+});
+app.delete("/api/lessons/:id", async (req) => ({ ok: deleteLesson((req.params as { id: string }).id) }));
 app.get("/api/snapshot", async () => snapshot());
 
 app.get("/api/runtime", async (req) => {

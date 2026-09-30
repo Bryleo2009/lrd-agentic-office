@@ -30,6 +30,20 @@ const BACK_WORDS = /\b(back|backend|api|endpoint|webhook|controller|controlador|
 const DATA_WORDS = /\b(datos|data|produccion|prod|ventas|reporte|metricas|kpi|estadisticas|cuantos|cuantas|promedio|ticket|consulta los|analiza los datos|clientes|pedidos del|dashboard)\b/;
 const CODE_WORDS = /\b(codigo|build|ci|test|pruebas|bug|error|corrig|arregl|implementa|refactor|compila|deploy|rama|pr)\b/;
 
+const RECORD_WORDS = /\b(pedido|pedidos|orden|ordenes|boleta|boletas|factura|facturas|comprobante|cliente|venta|ventas|ticket|producto|delivery|correlativo|transaccion|pago|cuenta|mesa|reserva)\b/;
+
+/**
+ * Consulta puntual de datos ("dame info del pedido que termina en 201631", "¿cuántas ventas hubo ayer?"):
+ * la responde un solo agente con los datos, sin repositorio, sin planificación de Atlas y sin reunión final.
+ */
+export function isQuickLookup(prompt: string): boolean {
+  const p = norm(prompt);
+  if (p.length > 280 || asksChange(prompt) || CODE_WORDS.test(p)) return false;
+  const asks = /^(dame|dime|muestrame|busca|buscame|consulta|revisa|ver|que|cual|cuales|cuanto|cuantos|cuantas|como esta|estado|info)\b|\?/.test(p);
+  const aboutRecord = RECORD_WORDS.test(p) && (/\d{3,}/.test(p) || /\b(hoy|ayer|semana|mes|ultimo|ultima|ultimos|ultimas)\b/.test(p));
+  return aboutRecord || (asks && DATA_WORDS.test(p));
+}
+
 /**
  * Elige el repositorio en modo Automático. Devuelve "none" si la misión es de datos/análisis sin código.
  * Siempre explica el motivo (se muestra en la oficina).
@@ -42,7 +56,7 @@ export function inferRepo(prompt: string, repos: RepositoryConfig[], mcpAvailabl
     const hit = names.find((n) => p.includes(n));
     if (hit && !["back", "front"].includes(hit)) return { id: r.id, reason: `la misión menciona "${hit}"` };
   }
-  const isData = DATA_WORDS.test(p) && !CODE_WORDS.test(p);
+  const isData = (DATA_WORDS.test(p) || isQuickLookup(prompt)) && !CODE_WORDS.test(p);
   if (isData && mcpAvailable) return { id: "none", reason: "es una consulta de datos: se trabaja sin repositorio, con los datos vía MCP" };
   const front = FRONT_WORDS.test(p);
   const back = BACK_WORDS.test(p);
@@ -109,7 +123,7 @@ export interface PlanRepo {
   worktree: string;
 }
 
-export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | null, base: string, team: AgentProfile[], mcp: string[] = [], multi: PlanRepo[] = []): string {
+export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | null, base: string, team: AgentProfile[], mcp: string[] = [], multi: PlanRepo[] = [], lessons = ""): string {
   const roster = team.filter((a) => a.id !== "atlas" && a.id !== "vega").map((a) => `- ${a.id}: ${a.name}, ${a.role}. ${a.tagline}`).join("\n");
   const where = multi.length > 1
     ? `Esta misión abarca VARIOS repositorios que se trabajan EN PARALELO, cada uno en su propia carpeta:
@@ -119,7 +133,7 @@ Pasos de repos distintos no deben depender entre sí salvo que sea imprescindibl
 Puedes leer brevemente ambas carpetas para asignar bien el trabajo.`
     : repo
     ? `Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.
-Explora brevemente la estructura del repositorio (máximo unos pocos comandos de lectura) para asignar bien el trabajo.`
+${isAnalysisOnly(mission) && mcp.length ? "Es una consulta: NO explores el repositorio; planifica directo con lo que sabes del equipo." : "Si lo necesitas, mira la estructura con 1-2 comandos de lectura como máximo; no hagas un análisis profundo, eso es trabajo de los agentes."}`
     : `Esta misión NO tiene repositorio: es de análisis / datos. Nadie modifica código; todos los pasos son "writes": false.${mcp.length ? " Asigna las consultas de datos a quien mejor encaje (p. ej. Nora para base de datos, Fiona para finanzas, Rafa/Piero para Rappi/PedidosYa)." : ""}`;
   return `Eres Atlas, lead del equipo de agentes de LRD. Tu trabajo AHORA es SOLO planificar (no edites archivos).
 
@@ -129,6 +143,7 @@ Misión del usuario:
 ${where}
 ${mcpRules(mcp)}
 
+${lessons}
 Equipo disponible (usa el id en "agent"):
 ${roster}
 
@@ -136,7 +151,8 @@ QA (Vega) y la revisión final (Atlas) las agrega el sistema automáticamente: N
 Git (commit/push/PR) lo controla el sistema: NO lo incluyas.
 
 Reglas del plan:
-- Entre 1 y 4 pasos. Usa solo agentes cuyo rol encaje con la misión.
+- Entre 1 y 4 pasos. Usa el MENOR número de agentes que resuelva la misión: una consulta o dato puntual es 1 solo paso de 1 agente; no encadenes especialistas "por si acaso".
+- Usa solo agentes cuyo rol encaje con la misión.
 - Pasos de investigación: "writes": false. Pasos que modifican código: "writes": true.
 - Si la misión solo pide analizar/explicar, ningún paso debe tener "writes": true.
 - Si la misión pide corregir/arreglar/implementar, al menos un paso debe tener "writes": true (y "deliverable": "code_change").

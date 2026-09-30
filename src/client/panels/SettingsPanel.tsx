@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentId, AgentProfile, Appearance, Gender, Provider, RepositoryConfig } from "../../shared/types";
+import type { AgentId, AgentProfile, Appearance, Gender, Lesson, Provider, RepositoryConfig } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
 
-type Tab = "team" | "repos" | "data";
+type Tab = "team" | "repos" | "data" | "memory";
 
 const HAIR: [Appearance["hairStyle"], string][] = [
   ["side_part", "Corto con raya"],
@@ -73,11 +73,15 @@ export function SettingsPanel({ engine }: { engine: OfficeEngine | null }) {
           <button className={tab === "data" ? "on" : ""} onClick={() => setTab("data")}>
             Datos (MCP)
           </button>
+          <button className={tab === "memory" ? "on" : ""} onClick={() => setTab("memory")}>
+            Lo que aprendió
+          </button>
         </div>
         <div className="settings-body">
           {tab === "team" && <TeamTab engine={engine} />}
           {tab === "repos" && <ReposTab />}
           {tab === "data" && <DataTab />}
+          {tab === "memory" && <MemoryTab />}
         </div>
       </div>
     </div>
@@ -397,6 +401,71 @@ function DataTab() {
         <br />
         <b>Recomendado:</b> que el MCP de producción use un usuario de base de datos con permisos de <b>solo lectura</b>. Las reglas del prompt ayudan, pero la garantía real
         es el permiso del usuario de la base de datos.
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Memoria del equipo
+
+const SCOPE_LABEL: Record<string, string> = { datos: "Datos", general: "General" };
+
+function MemoryTab() {
+  const [items, setItems] = useState<Lesson[] | null>(null);
+  const [text, setText] = useState("");
+  const [scope, setScope] = useState("general");
+  const repos = useStore((s) => s.repositories).filter((r) => r.enabled);
+  const load = () => void api.lessons().then(setItems).catch(() => setItems([]));
+  useEffect(load, []);
+  const add = async () => {
+    if (!text.trim()) return;
+    await api.addLesson(text.trim(), scope);
+    setText("");
+    load();
+  };
+  return (
+    <div className="repos">
+      <p className="fineprint">
+        Cuando el equipo pierde tiempo en algo evitable (una herramienta que falla, un dato difícil de ubicar, pasos de más), lo anota aquí. Antes de cada misión, Atlas y los agentes leen
+        estas lecciones para ir directo. Puedes borrar las que no sirvan o agregar las tuyas.
+      </p>
+      {items === null ? (
+        <div className="empty">Cargando…</div>
+      ) : items.length === 0 ? (
+        <div className="empty">Todavía no hay lecciones. Se irán sumando con cada misión.</div>
+      ) : (
+        items.map((l) => (
+          <div key={l.id} className="repo-row">
+            <div className="repo-head">
+              <span className="mini-pill ok">{SCOPE_LABEL[l.scope] ?? l.scope}</span>
+              <span className="grow">{l.text}</span>
+              <span className="muted" title="Veces que se volvió a aprender">
+                {l.source === "usuario" ? "tuya" : l.source === "auto" ? "automática" : "del equipo"}
+                {l.hits > 1 ? ` · ×${l.hits}` : ""}
+              </span>
+              <button className="btn" onClick={() => void api.deleteLesson(l.id).then(load)} aria-label="Olvidar esta lección">
+                Olvidar
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+      <div className="repo-row">
+        <div className="repo-head">
+          <input className="grow" value={text} placeholder="Ej.: Para buscar un pedido por número usa numero_orden o correlativo" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void add()} />
+          <select value={scope} onChange={(e) => setScope(e.target.value)}>
+            <option value="general">General</option>
+            <option value="datos">Datos</option>
+            {repos.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <button className="btn primary" disabled={!text.trim()} onClick={() => void add()}>
+            Enseñar
+          </button>
+        </div>
       </div>
     </div>
   );

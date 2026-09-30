@@ -256,3 +256,38 @@ test("QA por etapas y bash de Git en Windows", async () => {
   assert.equal(resolveShellCommand("bash scripts/check-backend", "linux"), "bash scripts/check-backend");
   assert.equal(resolveShellCommand("npm run build", "win32", () => true), "npm run build");
 });
+
+test("consulta rápida: el ejemplo real no elige repo ni planifica; lo que cambia código sí", async () => {
+  const { isQuickLookup } = await import("../src/server/missions/MissionPlanner");
+  const q = "Dame infor sobre el pedido que termina en 201631";
+  assert.equal(isQuickLookup(q), true);
+  assert.equal(inferRepo(q, [repo], true).id, "none");
+  assert.equal(isQuickLookup("¿Cuántas boletas se emitieron hoy?"), true);
+  assert.equal(isQuickLookup("Corrige el cálculo del pedido 201631"), false);
+  assert.equal(isQuickLookup("Revisa por qué falla el CI de fase3.1"), false);
+});
+
+test("memoria: extrae LECCIÓN, limpia datos personales, refuerza duplicadas y entiende el error MCP real", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  process.env.LRD_LESSONS_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lessons-")), "lessons.json");
+  const L = await import("../src/server/missions/lessons");
+  const { lessons, rest } = L.extractLessons("Todo bien.\nLECCIÓN: usa numero_orden para buscar pedidos\nRESUMEN: ok");
+  assert.deepEqual(lessons, ["usa numero_orden para buscar pedidos"]);
+  assert.equal(rest, "Todo bien.\nRESUMEN: ok");
+  assert.equal(L.sanitizeLesson("escribe a juan.perez@correo.com o al +51 987 654 321"), "escribe a [correo] o al [número]");
+
+  const a = L.addLesson("Usa numero_orden para buscar pedidos", "datos", "equipo")!;
+  const b = L.addLesson("usa numero_orden para buscar pedidos", "datos", "equipo")!;
+  assert.equal(a.id, b.id);
+  assert.equal(b.hits, 2);
+  assert.match(L.lessonsFor(["datos"]), /numero_orden/);
+  assert.equal(L.lessonsFor(["lrd-front"]), "");
+
+  // Payload tal cual llegó en la misión real
+  const payload = JSON.stringify({ content: [{ type: "text", text: JSON.stringify({ success: false, error: "Faltan credenciales para LRD Back Producción. Configure LRD_PROD_EMAIL, LRD_PROD_PASSWORD y LRD_PROD_RECAPTCHA_TOKEN." }) }], structured_content: null });
+  const t = L.lessonFromToolFailure("lrd.lrd_auth_check", payload)!;
+  assert.match(t, /lrd\.lrd_auth_check falla en este entorno \("Faltan credenciales/);
+  assert.ok(L.deleteLesson(a.id));
+});
