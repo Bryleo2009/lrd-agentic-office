@@ -10,7 +10,7 @@ import { gitManager, GitError, isProtected, slugify } from "../integrations/git/
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
 import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor } from "../missions/lessons";
-import { asksChange, buildPlannerPrompt, deliveryPrefs, inferBase, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { waitForCi } from "../missions/ci";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
@@ -292,12 +292,20 @@ export class AgentOrchestrator {
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STARTED", title: multi ? `Preparando ${rs.length} espacios de trabajo (${rs.map((r) => r.name).join(" + ")})` : "Preparando espacio de trabajo", status: "running" });
       await Promise.all(
         rs.map(async (r) => {
-          const base = baseOf(r);
+          let base = baseOf(r);
           const repoPath = await gitManager.ensureClone(r);
           repo.upsertRepository({ id: r.id, name: r.name, github: r.github, cloneUrl: r.cloneUrl, localPath: repoPath });
           this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_FETCH", title: `git fetch origin (${r.name})`, command: "git fetch origin --prune", status: "running" });
           await gitManager.fetch(r);
           repo.upsertRepository({ id: r.id, name: r.name, github: r.github, cloneUrl: r.cloneUrl, localPath: repoPath, lastFetchAt: new Date().toISOString() });
+          // ¿La misión apunta a otra rama existente (la de un run de CI, o una nombrada en el texto)? Se parte de ella.
+          const target = base === r.defaultBase ? await this.targetBranch(id, mission, r) : null;
+          if (target && target !== base) {
+            base = target;
+            if (multi) mission.repos = mission.repos.map((x) => (x.repositoryId === r.id ? { ...x, baseBranch: base } : x));
+            else mission.baseBranch = base;
+            this.setMission(id, multi ? { repos: mission.repos } : { baseBranch: base });
+          }
           if (!(await gitManager.remoteBranchExists(r, base))) throw new GitError(`La rama base origin/${base} no existe en ${r.github}`, "");
           const wt = await gitManager.createWorktree(r, id, base);
           rt.repos.set(r.id, { cfg: r, base, wt });
@@ -482,6 +490,36 @@ No hagas git commit/push: el orquestador lo hace. Termina con "RESUMEN:" y una f
       sha = newSha;
       res.commitSha = newSha;
     }
+  }
+
+  /**
+   * Rama existente de la que debe partir la misión aunque no sea una rama base configurada:
+   * la de un run de GitHub Actions citado ("CI #502", enlace del run) o una rama nombrada en el texto.
+   * Solo se LEE de ella: la entrega sigue siendo una rama agentic/… nueva (o directa si se pide y no está protegida).
+   */
+  private async targetBranch(id: string, mission: Mission, r: RepositoryConfig): Promise<string | null> {
+    const ref = ciRunRef(mission.prompt);
+    if (ref) {
+      const info = await github.runInfo(r.github, ref).catch(() => null);
+      if (info?.headBranch && (await gitManager.remoteBranchExists(r, info.headBranch))) {
+        this.emit(id, "atlas", {
+          provider: "github",
+          sessionId: null,
+          type: "AGENT_STATUS",
+          title: `Rama base: ${info.headBranch} (la del run #${info.number} de ${info.workflowName})`,
+          detail: `El CI citado corrió sobre ${info.headBranch} @ ${info.headSha.slice(0, 7)}; se trabaja sobre esa rama, no sobre ${r.defaultBase}.`,
+          status: "info",
+        });
+        return info.headBranch;
+      }
+      if (!info) this.emit(id, "atlas", { provider: "github", sessionId: null, type: "AGENT_STATUS", title: "No pude identificar la rama del run de CI citado", detail: "Se usa la rama base por defecto. Si la misión es sobre otra rama, nómbrala en el texto (p. ej. \"en la rama feature/…\").", status: "warning" });
+    }
+    for (const b of mentionedBranches(mission.prompt)) {
+      if (b === r.defaultBase || !(await gitManager.remoteBranchExists(r, b))) continue;
+      this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: `Rama base tomada de la misión: ${b}`, status: "info" });
+      return b;
+    }
+    return null;
   }
 
   /** Rama de entrega: la que pide la misión (si está libre) o una generada agentic/<área>/<slug>-<id>. */

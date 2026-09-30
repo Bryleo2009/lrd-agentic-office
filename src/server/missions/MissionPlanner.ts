@@ -81,6 +81,32 @@ export function inferBase(prompt: string, repo: RepositoryConfig): string | null
   return scored[0].b;
 }
 
+/**
+ * Ramas existentes que la misión nombra como punto de partida ("en la rama feature/x", "corrige feature/y"),
+ * aunque no estén entre las ramas base configuradas. Excluye la rama de salida agentic/… y las prohibidas.
+ */
+export function mentionedBranches(prompt: string): string[] {
+  const out = requestedBranch(prompt);
+  const p = norm(prompt).replace(/`/g, " ");
+  const names = new Set<string>();
+  for (const m of prompt.matchAll(/(?<![\w/.-])((?:feature|feat|fix|hotfix|bugfix|release|chore|refactor|develop|dev|hotfixes|features)\/[A-Za-z0-9._\/-]*[A-Za-z0-9])/g)) names.add(m[1]);
+  return [...names].filter((b) => b !== out && mentionScore(p, b, /(rama|branch|desde|en|sobre|de|del)[^.\n]{0,40}$/) > 0);
+}
+
+/**
+ * Referencia a una ejecución de GitHub Actions: enlace .../actions/runs/<id> o "#<número>" junto a palabras de CI.
+ * Devuelve el id o el número de ejecución y, si se nombra, el workflow ("Frontend Quality").
+ */
+export function ciRunRef(prompt: string): { runId?: number; runNumber?: number; workflowHint: string | null } | null {
+  const url = prompt.match(/actions\/runs\/(\d{5,})/);
+  const wf = prompt.match(/\b(?:ci|workflow|action)\s+[«"'`]?([A-Za-z][\w -]{2,40}?(?:quality|ci|tests?|build|lint|check|checks|pipeline))\b/i)?.[1]?.trim() ?? null;
+  if (url) return { runId: Number(url[1]), workflowHint: wf };
+  const p = norm(prompt);
+  if (!/\b(ci|actions?|workflow|pipeline|quality|run|ejecucion)\b/.test(p)) return null;
+  const n = prompt.match(/#(\d{1,6})\b/) ?? prompt.match(/\b(?:run|ejecuci[oó]n)\s+(\d{1,6})\b/i);
+  return n ? { runNumber: Number(n[1]), workflowHint: wf } : null;
+}
+
 /** Nombre de rama pedido explícitamente ("Crea una rama agentic/feature/xyz"). Debe empezar con agentic/. */
 export function requestedBranch(prompt: string): string | null {
   const m = prompt.match(/\bagentic\/[A-Za-z0-9._\/-]*[A-Za-z0-9]/);

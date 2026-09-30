@@ -20,6 +20,7 @@ function makeRepo(name: string, pkg: object): string {
   git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], seed);
   git(["push", "-q", "origin", "HEAD:refs/heads/release/fase2"], seed);
   git(["push", "-q", "origin", "HEAD:refs/heads/release/fase3.1"], seed);
+  git(["push", "-q", "origin", "HEAD:refs/heads/feature/venta-salon"], seed);
   return bare;
 }
 // Cada script de QA deja constancia de cuándo corrió, para comprobar que van en paralelo.
@@ -262,4 +263,22 @@ test("publicar por chat: integra commits remotos nuevos; si un hook bloquea, exp
   eventBus.off("message", onMsg);
   const local = git(["rev-parse", "HEAD"], repo.getMission(m.id)!.worktree!);
   assert.equal(git(["rev-parse", `refs/heads/${m.branch}`], front), local, "lo publicado es lo último de la carpeta de la misión");
+});
+
+test("'valida el CI #502 y corrígelo': parte de la rama donde corrió ese run, no de la base por defecto", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  process.env.FAKE_GH_RUN_BRANCH = "feature/venta-salon";
+  let m = repo.getMission((await orchestrator.createMission({ prompt: "valida el CI Frontend Quality feat: add SalonCheckoutDrawer #502 en Github y corrigelo", repositoryId: "lrd-front", engine: "codex" })).id)!;
+  for (let i = 0; i < 400 && !["done", "failed"].includes(m.status); i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    m = repo.getMission(m.id)!;
+  }
+  delete process.env.FAKE_GH_RUN_BRANCH;
+  assert.equal(m.status, "done", m.error ?? "");
+  assert.equal(m.baseBranch, "feature/venta-salon");
+  assert.match(m.branch ?? "", /^agentic\//, "la corrección va en una rama agentic/… nueva (no se toca la feature sin pedirlo)");
+  // La rama publicada sale de feature/venta-salon.
+  const mergeBase = git(["merge-base", `refs/heads/${m.branch}`, "refs/heads/feature/venta-salon"], front);
+  assert.equal(mergeBase, git(["rev-parse", "refs/heads/feature/venta-salon"], front));
 });

@@ -317,3 +317,13 @@ test("errores de git al publicar: se explica la causa real", async () => {
   assert.match(explainGitError("git push falló", "git@github.com: Permission denied (publickey).").title, /credenciales/);
   assert.match(explainGitError("git push falló", "remote: error: GH006: Protected branch update failed").title, /protegida/);
 });
+
+test("misión sobre un run de CI o una rama existente: detecta cuál", async () => {
+  const { ciRunRef, mentionedBranches } = await import("../src/server/missions/MissionPlanner");
+  const q = "que opinas de.. la tarea fue valida el CI Frontend Quality feat: add SalonCheckoutDrawer component for managing salon payments #502 en Github y corrigelo";
+  assert.deepEqual(ciRunRef(q), { runNumber: 502, workflowHint: "Frontend Quality" });
+  assert.equal(ciRunRef("revisa https://github.com/o/r/actions/runs/36759211138 y corrige")?.runId, 36759211138);
+  assert.equal(ciRunRef("agrega el filtro #3 a la consola"), null, "un # sin contexto de CI no es un run");
+  assert.deepEqual(mentionedBranches("Corrige el lint en la rama `feature/venta-salon-configuracion-mesas`"), ["feature/venta-salon-configuracion-mesas"]);
+  assert.deepEqual(mentionedBranches("No toques feature/vieja; crea agentic/feature/nueva"), []);
+});

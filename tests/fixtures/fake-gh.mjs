@@ -9,6 +9,11 @@ const mode = process.env.FAKE_GH_MODE || "green";
 const repos = JSON.parse(process.env.FAKE_GH_REPOS || "{}");
 const git = (args, cwd) => execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
 if (a[0] === "--version") { console.log("gh version 2.99.0"); process.exit(0); }
+if (a[0] === "run" && a[1] === "list" && (arg("--json") ?? "").includes("number")) {
+  // Runs históricos del repo (para ubicar "CI #502"): FAKE_GH_RUN_BRANCH es la rama donde corrió.
+  console.log(JSON.stringify([{ number: 502, headBranch: process.env.FAKE_GH_RUN_BRANCH || "feature/x", headSha: "f1d2d747aaaa", workflowName: "Frontend Quality" }, { number: 502, headBranch: "otra", headSha: "b", workflowName: "Backend Quality" }]));
+  process.exit(0);
+}
 if (a[0] === "run" && a[1] === "list") {
   if (arg("--workflow")) { console.log(JSON.stringify([{ conclusion: "success" }])); process.exit(0); } // la base está en verde
   if (mode === "none") { console.log("[]"); process.exit(0); }

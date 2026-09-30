@@ -145,7 +145,7 @@ export function buildReport(m: Mission): string {
       if (idle.length) out.push(`• ${idle.join(", ")}: sin cambios.`);
     } else out.push("Entrega: fue un análisis, no hubo cambios de código ni ramas nuevas.");
   } else if (m.commitSha && m.branch) {
-    const where = m.pushed ? `publicada en la rama \`${m.branch}\` para que la revises` : `en la rama local \`${m.branch}\` (sin publicar)`;
+    const where = `${m.pushed ? `publicada en la rama \`${m.branch}\` para que la revises` : `en la rama local \`${m.branch}\` (sin publicar)`}, creada desde \`${m.baseBranch}\``;
     out.push(`Entrega: commit ${m.commitSha.slice(0, 7)} ${where}.${m.prUrl ? ` PR: ${m.prUrl}` : ""}`);
   } else if (m.repositoryId !== NO_REPO) {
     out.push("Entrega: fue un análisis, no hubo cambios de código ni ramas nuevas.");

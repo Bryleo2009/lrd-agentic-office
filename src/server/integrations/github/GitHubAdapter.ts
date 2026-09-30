@@ -46,6 +46,29 @@ export class GitHubAdapter {
     }
   }
 
+  /** Rama y commit de una ejecución de Actions, por id o por número (+ nombre del workflow para desambiguar). */
+  async runInfo(repo: string, ref: { runId?: number; runNumber?: number; workflowHint: string | null }): Promise<{ headBranch: string; headSha: string; workflowName: string; number: number } | null> {
+    if (ref.runId) {
+      const r = await run(config.ghCommand, ["run", "view", String(ref.runId), "-R", repo, "--json", "headBranch,headSha,workflowName,number"], { timeoutMs: 60_000 });
+      if (r.code !== 0) return null;
+      try {
+        return JSON.parse(r.stdout);
+      } catch {
+        return null;
+      }
+    }
+    const r = await run(config.ghCommand, ["run", "list", "-R", repo, "--limit", "300", "--json", "number,headBranch,headSha,workflowName"], { timeoutMs: 60_000 });
+    if (r.code !== 0) return null;
+    try {
+      const all = (JSON.parse(r.stdout || "[]") as { number: number; headBranch: string; headSha: string; workflowName: string }[]).filter((x) => x.number === ref.runNumber);
+      const hint = ref.workflowHint?.toLowerCase();
+      const pick = (hint ? all.filter((x) => x.workflowName.toLowerCase().includes(hint) || hint.includes(x.workflowName.toLowerCase())) : []).concat(all.length === 1 ? all : []);
+      return pick[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async createPr(cwd: string, opts: { base: string; head: string; title: string; body: string }): Promise<string> {
     const r = await run(config.ghCommand, ["pr", "create", "--base", opts.base, "--head", opts.head, "--title", opts.title, "--body", opts.body], {
       cwd,
