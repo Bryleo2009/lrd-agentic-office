@@ -161,3 +161,32 @@ test("uso por motor: pasos, duración, límites alcanzados y misiones", async ()
   assert.equal(m.missions.questions, 1);
   assert.equal(m.missions.approvals, 1);
 });
+
+test("un 404 / 'no encontrado' no se aprende como herramienta rota; si vuelve a funcionar se olvida", async () => {
+  const L = await import("../src/server/missions/lessons");
+  const notFound = JSON.stringify({ content: [{ type: "text", text: JSON.stringify({ success: false, error: "Backend lrd_query_production respondió 404 Not Found" }) }] });
+  assert.equal(L.lessonFromToolFailure("mcp__lrd__lrd_order_get", notFound), null);
+  assert.equal(L.lessonFromToolFailure("mcp__lrd__lrd_order_get", "La orden no existe"), null);
+  const infra = L.lessonFromToolFailure("mcp__lrd__db_explain", "connect ECONNREFUSED 10.0.0.5:5432");
+  assert.match(infra ?? "", /lrd\.db_explain falla[\s\S]*no concluyas que el dato no existe/);
+  L.addLesson(infra!, "datos", "auto");
+  assert.ok(L.listLessons().some((l) => l.text === infra));
+  assert.equal(L.forgetToolFailures("mcp__lrd__db_explain"), 1, "respondió bien: se olvida");
+  // Lecciones viejas que tomaron un 404 por herramienta rota se limpian al arrancar.
+  L.addLesson('La herramienta lrd.lrd_order_get falla en este entorno ("Backend lrd_query_production respondió 404"). No la uses como paso previo; ve directo a la consulta que se necesita.', "datos", "auto");
+  assert.equal(L.purgeMisreadToolLessons(), 1);
+  assert.ok(!L.listLessons().some((l) => /lrd_order_get/.test(l.text)));
+});
+
+test("datos: se distingue Producción y QA, y 'no encontrado' en uno obliga a buscar en el otro", async () => {
+  const { mcpEnv, mcpRules } = await import("../src/server/missions/MissionPlanner");
+  assert.equal(mcpEnv("lrd_query_production"), "Producción");
+  assert.equal(mcpEnv("lrd-qa"), "QA");
+  assert.equal(mcpEnv("lrd_query_staging"), "QA");
+  assert.equal(mcpEnv("lrd"), null);
+  const both = mcpRules(["lrd_query_production", "lrd_query_qa"]);
+  assert.match(both, /lrd_query_production = Producción, lrd_query_qa = QA/);
+  assert.match(both, /primero en Producción y, si no aparece, en QA/);
+  assert.match(both, /404[\s\S]*NO una herramienta rota/);
+  assert.match(mcpRules(["lrd"]), /Producción y de QA \(por su nombre\)/);
+});

@@ -12,7 +12,7 @@ import * as repo from "./database/repo";
 import { eventBus } from "./events/AgentEventBus";
 import { assertApiDisabled } from "./runtime/ApiExecutor";
 import { installShutdownHooks, reapOrphans } from "./runtime/childRegistry";
-import { addLesson, deleteLesson, listLessons } from "./missions/lessons";
+import { addLesson, deleteLesson, listLessons, purgeMisreadToolLessons } from "./missions/lessons";
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
 import { cleanupOld } from "./maintenance";
@@ -176,6 +176,10 @@ if (config.isProd) {
     vite.middlewares(req, res, next);
   });
 }
+
+// Lecciones automáticas viejas que tomaron un "no encontrado" (404) por una herramienta rota: se olvidan.
+const purged = purgeMisreadToolLessons();
+if (purged) console.log(`[lrd] Se olvidaron ${purged} lección(es) que confundían un "no encontrado" con una herramienta rota.`);
 
 // Procesos de agentes/QA que quedaron vivos de una ejecución anterior se cierran antes de retomar nada.
 installShutdownHooks();

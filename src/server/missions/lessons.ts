@@ -161,7 +161,37 @@ export function extractLessons(text: string): { lessons: string[]; rest: string 
   return { lessons, rest };
 }
 
-/** Una herramienta de datos que falló se recuerda como hecho, para no volver a tropezar con ella. */
+/**
+ * "No encontrado" (404, sin resultados) o un parámetro inválido son RESPUESTAS sobre los datos, no una
+ * herramienta rota: nunca se aprenden como "la herramienta falla", o el equipo deja de usarla y se rinde.
+ */
+export function isNotFoundOrInput(msg: string): boolean {
+  return /\b(404|400|422)\b|not[ _-]?found|no (se )?encontr|no existe|sin resultados|no results|0 rows|does not exist|invalid (param|arg|input)|validation/i.test(msg);
+}
+
+const TOOL_LESSON = /^La herramienta (\S+) falla en este entorno \("(.*)"\)/;
+
+/** Nombre corto de una herramienta MCP para las lecciones (mcp__srv__tool → srv.tool). */
+const shortTool = (tool: string) => tool.replace(/^mcp__/, "").replace(/__/g, ".");
+
+/** La herramienta respondió bien: se olvidan las lecciones automáticas que decían que fallaba. */
+export function forgetToolFailures(tool: string): number {
+  const short = shortTool(tool);
+  const all = load();
+  const next = all.filter((l) => !(l.source === "auto" && l.text.startsWith(`La herramienta ${short} falla`)));
+  if (next.length !== all.length) save(next);
+  return all.length - next.length;
+}
+
+/** Limpia lecciones automáticas viejas que tomaron un "no encontrado" por una herramienta rota. */
+export function purgeMisreadToolLessons(): number {
+  const all = load();
+  const next = all.filter((l) => !(l.source === "auto" && isNotFoundOrInput(l.text.match(TOOL_LESSON)?.[2] ?? "")));
+  if (next.length !== all.length) save(next);
+  return all.length - next.length;
+}
+
+/** Una herramienta de datos que falló (por infraestructura) se recuerda, para no volver a tropezar con ella. */
 export function lessonFromToolFailure(tool: string, detail: string): string | null {
   let msg = detail;
   try {
@@ -174,7 +204,6 @@ export function lessonFromToolFailure(tool: string, detail: string): string | nu
     /* texto plano */
   }
   msg = msg.replace(/\s+/g, " ").trim().slice(0, 160);
-  if (!msg) return null;
-  const short = tool.replace(/^mcp__/, "").replace(/__/g, ".");
-  return `La herramienta ${short} falla en este entorno ("${msg}"). No la uses como paso previo; ve directo a la consulta que se necesita.`;
+  if (!msg || isNotFoundOrInput(msg)) return null;
+  return `La herramienta ${shortTool(tool)} falla en este entorno ("${msg}"). Si vuelve a fallar así, usa otra vía de solo lectura para el mismo dato; no concluyas que el dato no existe.`;
 }

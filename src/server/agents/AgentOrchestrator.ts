@@ -9,7 +9,7 @@ import { eventBus } from "../events/AgentEventBus";
 import { gitManager, GitError, isProtected, slugify } from "../integrations/git/GitWorktreeManager";
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
-import { addLesson, extractLessons, lessonFromToolFailure, lessonsFor, lessonsPrompt, pickLessons, recordCorrection, recordOutcome } from "../missions/lessons";
+import { addLesson, extractLessons, forgetToolFailures, lessonFromToolFailure, lessonsFor, lessonsPrompt, pickLessons, recordCorrection, recordOutcome } from "../missions/lessons";
 import { guideFor, TASK_KIND_LABEL, taskKind } from "../missions/guides";
 import { ASK_RULE, extractQuestion, pickOption, questionKey } from "../missions/questions";
 import { migrationFiles, scanSecrets } from "../missions/secrets";
@@ -1000,6 +1000,7 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
 
 Es una consulta puntual: respóndela directo con los datos, en pocas consultas (idealmente 1 a 3).
 - Si hay varias coincidencias, lístalas brevemente (máx. 5, con fecha y canal) y detalla la más reciente o la que mejor encaje; no investigues todas.
+- Un "no encontrado" (404, sin resultados) NO es una herramienta rota: antes de concluir, prueba la búsqueda parcial por número/correlativo y, si hay otro entorno (Producción / QA), búscalo también ahí. Di en qué entorno lo encontraste.
 - No revises integraciones externas, código, logs ni permisos salvo que el usuario lo pida explícitamente.
 - Responde en pocas líneas, como se lo dirías a alguien del equipo.`;
       const step = this.newStep(id, "s1", who, "Consulta rápida", task, [], false, "agent");
@@ -1314,9 +1315,14 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     const { finalText, ...rest } = ev;
     // Una herramienta de datos que falla se recuerda, para que la próxima vez no se pierda tiempo en ella.
     const meta = (ev.metadata ?? {}) as { mcp?: boolean };
-    if (missionId && ev.type === "TOOL_FINISHED" && meta.mcp && ev.tool && (ev.status === "error" || /"success"\s*:\s*false/.test(ev.detail ?? ""))) {
-      const l = lessonFromToolFailure(ev.tool, ev.detail ?? "");
-      if (l) this.learn(missionId, agentId, [l], "datos", "auto");
+    if (missionId && ev.type === "TOOL_FINISHED" && meta.mcp && ev.tool) {
+      if (ev.status === "error" || /"success"\s*:\s*false/.test(ev.detail ?? "")) {
+        const l = lessonFromToolFailure(ev.tool, ev.detail ?? "");
+        if (l) this.learn(missionId, agentId, [l], "datos", "auto");
+      } else if (forgetToolFailures(ev.tool)) {
+        // Volvió a funcionar: la lección de que "falla" ya no es cierta.
+        this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Olvidado: ${ev.tool.replace(/^mcp__/, "").replace(/__/g, ".")} ya funciona`, status: "info" });
+      }
     }
     // AGENT_FINISHED de un paso intermedio no es el fin de la misión.
     return eventBus.publish({ ...rest, missionId, agentId, provider, sessionId, metadata: { ...(rest.metadata ?? {}), stepId: step?.id ?? null } });

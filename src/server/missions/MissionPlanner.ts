@@ -213,10 +213,22 @@ export function isAnalysisOnly(prompt: string): boolean {
   return asksAnalysis && !asksChange(prompt);
 }
 
+/** Entorno de una fuente de datos según su nombre (servidor MCP o plugin). */
+export function mcpEnv(name: string): "Producción" | "QA" | null {
+  const n = name.toLowerCase();
+  if (/(^|[-_.\s])(qa|staging|stage|stg|test|testing|dev|sandbox|pruebas?)([-_.\s]|$)/.test(n)) return "QA";
+  if (/prod|production|produccion|producción|live/.test(n)) return "Producción";
+  return null;
+}
+
 export function mcpRules(servers: string[]): string {
   if (!servers.length) return "";
+  const labeled = servers.map((s) => ({ s, env: mcpEnv(s) }));
+  const envs = labeled.some((x) => x.env === "QA") && labeled.some((x) => x.env === "Producción");
   return `
-Tienes acceso a servidores MCP con DATOS REALES DE PRODUCCIÓN (${servers.join(", ")}). Reglas obligatorias:
+Tienes acceso a servidores MCP con DATOS REALES (${labeled.map((x) => (x.env ? `${x.s} = ${x.env}` : x.s)).join(", ")}). Reglas obligatorias:
+- Entornos: ${envs ? "hay Producción y QA. Si la misión no dice el entorno, busca primero en Producción y, si no aparece, en QA antes de concluir; di siempre en qué entorno estaba el dato." : "si ves herramientas o backends de Producción y de QA (por su nombre), y la misión no dice el entorno, busca en Producción y luego en QA antes de concluir; di en qué entorno estaba el dato."}
+- Un 404 / "no encontrado" / sin resultados es una respuesta sobre los datos, NO una herramienta rota.
 - SOLO LECTURA: únicamente consultas de lectura (SELECT / GET). Nunca INSERT, UPDATE, DELETE, DDL, ni acciones que modifiquen datos o envíen algo.
 - Limita resultados (LIMIT / filtros por fecha) y prefiere agregados.
 - No copies datos personales sensibles (documentos, teléfonos, correos, tarjetas) en tu respuesta; resume.
