@@ -1,4 +1,5 @@
-import { getAgent, isAgentId } from "../../shared/agents";
+import { isAgentId } from "../../shared/agents";
+import { agentOf as getAgent } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId, Mission } from "../../shared/types";
 import type { OfficeEngine } from "./OfficeEngine";
@@ -143,7 +144,7 @@ export class MissionVisualController {
         e.say(`${ev.title}…`, "work", 2.6);
         break;
       case "TOOL_STARTED":
-        act({ action: meta.edit ? "type" : "think" });
+        act({ action: meta.edit ? "type" : meta.mcp ? "read" : "think" });
         e.say(`${ev.title}…`, "work", 3);
         break;
       case "FILE_CHANGED":

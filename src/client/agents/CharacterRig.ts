@@ -1,20 +1,7 @@
 import { Container, Graphics } from "pixi.js";
 
-export interface Appearance {
-  skin: string;
-  hair: string;
-  hairStyle: "side_part" | "curly" | "ponytail" | "bun" | "bob" | "buzz" | "wavy" | "long";
-  outfit: "blazer" | "hoodie" | "sweater" | "shirt" | "polo" | "blouse";
-  shirt: string;
-  shirtAccent: string;
-  pants: string;
-  shoes: string;
-  accessory: "none" | "glasses" | "headphones" | "headset" | "badge" | "earrings";
-  height: number;
-  build: number;
-  beard?: boolean;
-  renderer?: "rig" | "spritesheet";
-}
+import type { Appearance } from "../../shared/types";
+export type { Appearance };
 
 export const DEFAULT_APPEARANCE: Appearance = {
   skin: "#e0ac82",

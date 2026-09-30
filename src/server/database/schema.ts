@@ -23,6 +23,8 @@ export const missions = sqliteTable("missions", {
   id: text("id").primaryKey(),
   prompt: text("prompt").notNull(),
   repositoryId: text("repository_id").notNull(),
+  repoSelection: text("repo_selection").notNull().default("manual"),
+  allowMcp: integer("allow_mcp", { mode: "boolean" }).notNull().default(false),
   baseBranch: text("base_branch").notNull(),
   engine: text("engine").notNull(),
   provider: text("provider").notNull(),

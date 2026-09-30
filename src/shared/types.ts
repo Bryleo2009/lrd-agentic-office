@@ -21,6 +21,40 @@ export interface AgentDefinition {
   color: string;
 }
 
+export type Gender = "female" | "male" | "other";
+
+/** Apariencia del rig 2.5D del personaje. */
+export interface Appearance {
+  skin: string;
+  hair: string;
+  hairStyle: "side_part" | "curly" | "ponytail" | "bun" | "bob" | "buzz" | "wavy" | "long";
+  outfit: "blazer" | "hoodie" | "sweater" | "shirt" | "polo" | "blouse";
+  shirt: string;
+  shirtAccent: string;
+  pants: string;
+  shoes: string;
+  accessory: "none" | "glasses" | "headphones" | "headset" | "badge" | "earrings";
+  height: number;
+  build: number;
+  beard?: boolean;
+  renderer?: "rig" | "spritesheet";
+}
+
+/** Empleado personalizado: definición base + lo que el usuario edita. */
+export interface AgentProfile extends AgentDefinition {
+  gender: Gender;
+  appearance: Appearance;
+  /** Motor preferido en modo Automático (null = el de la misión). */
+  engine: Provider | null;
+  customized: boolean;
+}
+
+export interface McpServerInfo {
+  name: string;
+  enabled: boolean;
+  transport: string;
+}
+
 export interface RuntimeStatus {
   provider: Provider;
   label: string;
@@ -31,6 +65,8 @@ export interface RuntimeStatus {
   authDetail: string | null;
   /** Flags detectados en el --help de la versión instalada. */
   capabilities: Record<string, boolean>;
+  /** Servidores MCP configurados en el CLI (sólo nombre/estado; nunca args ni env). */
+  mcpServers: McpServerInfo[];
   message: string;
   checkedAt: string;
 }
@@ -66,10 +102,18 @@ export interface MissionStep {
   finishedAt: string | null;
 }
 
+/** Misión sin repositorio (análisis / datos). */
+export const NO_REPO = "none";
+
 export interface Mission {
   id: string;
   prompt: string;
+  /** Id del repositorio o "none" (análisis/datos sin código). */
   repositoryId: string;
+  /** Cómo se eligió el repositorio. */
+  repoSelection: "manual" | "auto";
+  /** Si los agentes pueden usar los servidores MCP (datos reales, sólo lectura). */
+  allowMcp: boolean;
   baseBranch: string;
   engine: EngineChoice;
   provider: Provider;
@@ -101,6 +145,11 @@ export interface RepositoryConfig {
   qaCommands?: string[];
   installCommand?: string | null;
   kind?: "frontend" | "backend" | "other";
+  /** Palabras que ayudan a elegir este repo en modo Automático. */
+  keywords?: string[];
+  /** Ruta de tu clon local en esta PC (Ajustes). Si existe, se usa en lugar de clonar. */
+  localPath?: string | null;
+  localStatus?: { ok: boolean; message: string; branch?: string | null } | null;
 }
 
 export interface AgentSessionInfo {
@@ -131,6 +180,7 @@ export interface Snapshot {
   config: PublicConfig;
   recentEvents: AgentRuntimeEvent[];
   sessions: AgentSessionInfo[];
+  team: AgentProfile[];
 }
 
 export type WsServerMessage =
@@ -139,4 +189,6 @@ export type WsServerMessage =
   | { kind: "mission"; mission: Mission }
   | { kind: "runtime"; runtime: RuntimeStatus[] }
   | { kind: "session"; session: AgentSessionInfo }
+  | { kind: "team"; team: AgentProfile[] }
+  | { kind: "repositories"; repositories: RepositoryConfig[] }
   | { kind: "chat"; agentId: AgentId; missionId: string | null; delta: string; done: boolean; error?: string };

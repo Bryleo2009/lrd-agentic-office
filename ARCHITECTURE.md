@@ -253,3 +253,19 @@ No se persisten API keys, OAuth tokens, contraseñas ni razonamiento.
 * Sin secretos en `.env.example`; `doctor` muestra `API fallback: disabled`.
 * Worktrees aislados; ramas protegidas; push/PR controlados por el orquestador con flags explícitos.
 * Errores reales: cualquier fallo (CLI, git, gh, build, tests) → `AGENT_BLOCKED/AGENT_ERROR` con el mensaje real. Nunca éxito inventado.
+
+## 15. Ajustes locales, repos opcionales y datos MCP
+
+* `src/server/settings.ts` → `<LRD_WORKSPACE_ROOT>/settings.json` (fuera del repo, sin secretos):
+  * `repoPaths`: ruta de tu clon por repo. `GitWorktreeManager.repoPath()` la usa en vez del clon gestionado.
+    Sólo `git fetch origin` (sin `--prune`) y `git worktree add` en tu repo: tu checkout y tus cambios no se tocan.
+  * `team`: overrides por agente (nombre, sexo, rol, descripción, responsabilidades, color, motor, apariencia).
+    `profile(id)` los combina con la definición base y `assets/characters/<id>/character.json`. Los prompts usan el nombre/rol personalizados.
+* `POST /api/missions`: `repositoryId` = id | `"auto"` | `"none"`; `baseBranch` opcional (default del repo).
+  `inferRepo()` elige el repo y la decisión se publica como evento. `"none"` ejecuta `runWithoutRepo()`: sin git, sin QA, sin commit.
+* MCP: `codex mcp list --json` / `claude mcp list` → `RuntimeStatus.mcpServers` (nombre/estado/transporte).
+  Por misión (`allowMcp`): si es `false`, Codex recibe `-c mcp_servers.<n>.enabled=false` y Claude `--strict-mcp-config`;
+  si es `true`, Claude recibe `--allowedTools mcp__<n>` y todos los prompts incluyen reglas de sólo lectura (`mcpRules`).
+  Las llamadas MCP se muestran como "Consultando datos: servidor · herramienta".
+* API: `GET/PUT /api/team/:id`, `POST /api/team/:id/reset`, `GET /api/repositories`, `PUT /api/repositories/:id/local-path`.
+  WS: `{kind:"team"}`, `{kind:"repositories"}` → la oficina reconstruye el rig del personaje en vivo.

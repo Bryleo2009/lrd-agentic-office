@@ -70,6 +70,7 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
       authenticated: null,
       authDetail: null,
       capabilities: {},
+      mcpServers: [],
       message: "",
       checkedAt: new Date().toISOString(),
     };
@@ -98,7 +99,10 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
       disallowedTools: /--disallowedTools\b|--disallowed-tools\b/.test(help),
       appendSystemPrompt: /--append-system-prompt\b/.test(help),
       authCommand: /\bauth\b/.test(help),
+      strictMcp: /--strict-mcp-config\b/.test(help),
+      mcpCommand: /\bmcp\b/.test(help),
     };
+    if (st.capabilities.mcpCommand) st.mcpServers = await this.listMcp();
 
     if (st.capabilities.authCommand) {
       const a = await run(this.command, ["auth", "status"], { timeoutMs: 20000 });
@@ -129,6 +133,19 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
     return this.save(st);
   }
 
+  /** `claude mcp list`: sólo nombres y estado. */
+  private async listMcp(): Promise<RuntimeStatus["mcpServers"]> {
+    const r = await run(this.command, ["mcp", "list"], { timeoutMs: 30000 });
+    if (r.code !== 0) return [];
+    const out: RuntimeStatus["mcpServers"] = [];
+    for (const line of r.stdout.split(/\r?\n/)) {
+      const m = line.match(/^([\w.-]+):\s+(.*)$/);
+      if (!m || /^(Checking|No MCP)/i.test(line)) continue;
+      out.push({ name: m[1], enabled: !/failed|disabled|✗/i.test(m[2]), transport: /https?:/.test(m[2]) ? "http" : "stdio" });
+    }
+    return out;
+  }
+
   private save(st: RuntimeStatus): RuntimeStatus {
     this.status = st;
     this.checkedAt = Date.now();
@@ -146,7 +163,10 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
     }
     const ro = session.config.permission === "read-only";
     if (caps.permissionMode) a.push("--permission-mode", ro ? "default" : "acceptEdits");
-    if (caps.allowedTools) a.push("--allowedTools", ...(ro ? READ_ONLY_TOOLS : WRITE_TOOLS));
+    const mcpTools = session.config.allowMcp ? (this.status?.mcpServers ?? []).map((m) => `mcp__${m.name}`) : [];
+    if (caps.allowedTools) a.push("--allowedTools", ...(ro ? READ_ONLY_TOOLS : WRITE_TOOLS), ...mcpTools);
+    // Sin permiso de datos: no se carga ningún servidor MCP.
+    if (!session.config.allowMcp && caps.strictMcp) a.push("--strict-mcp-config");
     if (caps.disallowedTools) a.push("--disallowedTools", ...(ro ? [...READ_ONLY_DENY, ...ALWAYS_DENY] : ALWAYS_DENY));
     if (appendSystem && caps.appendSystemPrompt) a.push("--append-system-prompt", appendSystem);
     return a;

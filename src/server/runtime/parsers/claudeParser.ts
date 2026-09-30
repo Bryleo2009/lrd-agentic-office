@@ -141,6 +141,12 @@ export class ClaudeStreamParser {
         break;
       }
       default:
+        if (name.startsWith("mcp__")) {
+          const [, server, tool] = name.split("__");
+          kind = "mcp";
+          ev = { type: "TOOL_STARTED", title: `Consultando datos: ${server}${tool ? ` · ${tool}` : ""}`, tool: name, detail: JSON.stringify(input).slice(0, 600), status: "running", metadata: { mcp: true, server } };
+          break;
+        }
         ev = { type: "TOOL_STARTED", title: `Usando ${name}`, tool: name, detail: JSON.stringify(input).slice(0, 400), status: "running" };
     }
     this.tools.set(id, { name, input, kind });
@@ -192,6 +198,8 @@ export class ClaudeStreamParser {
       }
       case "status":
         return [];
+      case "mcp":
+        return [{ type: "TOOL_FINISHED", title: isError ? "La consulta de datos falló" : "Datos recibidos", tool: t.name, detail: clip(text, 3000), status, metadata: { mcp: true } }];
       default:
         return [{ type: "TOOL_FINISHED", title: `${t.name} ${isError ? "falló" : "listo"}`, tool: t.name, detail: clip(text, 1500), status }];
     }

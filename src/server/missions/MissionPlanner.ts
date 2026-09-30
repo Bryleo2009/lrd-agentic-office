@@ -1,5 +1,5 @@
-import { AGENTS, isAgentId } from "../../shared/agents";
-import type { AgentId, RepositoryConfig } from "../../shared/types";
+import { isAgentId } from "../../shared/agents";
+import type { AgentId, AgentProfile, RepositoryConfig } from "../../shared/types";
 
 export interface PlannedStep {
   id: string;
@@ -17,18 +17,50 @@ export interface MissionPlan {
   note?: string;
 }
 
-const WORKERS = AGENTS.filter((a) => a.id !== "atlas" && a.id !== "vega");
-
 /** Área para el nombre de rama (se decide antes de crear el worktree). */
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-export function inferArea(prompt: string, repo: RepositoryConfig): string {
+/** Normaliza para comparar sin tildes ni mayúsculas. */
+export { norm };
+
+const FRONT_WORDS = /\b(front|frontend|ui|ux|vista|pantalla|componente|css|scss|html|angular|react|vue|formulario|boton|modal|responsive|pagina|web|checkout|carrito|salon|mobile)\b/;
+const BACK_WORDS = /\b(back|backend|api|endpoint|webhook|controller|controlador|servicio|laravel|php|artisan|migracion|cola|queue|job|rappi|pedidosya|pedidos ya|integracion|servidor|cron|base de datos)\b/;
+const DATA_WORDS = /\b(datos|data|produccion|prod|ventas|reporte|metricas|kpi|estadisticas|cuantos|cuantas|promedio|ticket|consulta los|analiza los datos|clientes|pedidos del|dashboard)\b/;
+const CODE_WORDS = /\b(codigo|build|ci|test|pruebas|bug|error|corrig|arregl|implementa|refactor|compila|deploy|rama|pr)\b/;
+
+/**
+ * Elige el repositorio en modo Automático. Devuelve "none" si la misión es de datos/análisis sin código.
+ * Siempre explica el motivo (se muestra en la oficina).
+ */
+export function inferRepo(prompt: string, repos: RepositoryConfig[], mcpAvailable: boolean): { id: string; reason: string } {
+  const p = norm(prompt);
+  const enabled = repos.filter((r) => r.enabled);
+  for (const r of enabled) {
+    const names = [r.id, r.name, r.shortName, ...(r.keywords ?? [])].map((x) => norm(x)).filter((x) => x.length > 2);
+    const hit = names.find((n) => p.includes(n));
+    if (hit && !["back", "front"].includes(hit)) return { id: r.id, reason: `la misión menciona "${hit}"` };
+  }
+  const isData = DATA_WORDS.test(p) && !CODE_WORDS.test(p);
+  if (isData && mcpAvailable) return { id: "none", reason: "es una consulta de datos: se trabaja sin repositorio, con los datos vía MCP" };
+  const front = FRONT_WORDS.test(p);
+  const back = BACK_WORDS.test(p);
+  const byKind = (k: string) => enabled.find((r) => r.kind === k);
+  if (front && !back && byKind("frontend")) return { id: byKind("frontend")!.id, reason: "habla de interfaz / frontend" };
+  if (back && !front && byKind("backend")) return { id: byKind("backend")!.id, reason: "habla de API / backend / integraciones" };
+  if (isData) return { id: "none", reason: "es una consulta de análisis sin cambios de código" };
+  const def = byKind("backend") ?? enabled[0];
+  if (!def) return { id: "none", reason: "no hay repositorios habilitados" };
+  return { id: def.id, reason: front && back ? "menciona front y back; se empieza por el backend" : "no hay pistas claras; se usa el backend por defecto" };
+}
+
+export function inferArea(prompt: string, repo: RepositoryConfig | null): string {
   const p = norm(prompt);
   if (/\brappi\b/.test(p)) return "rappi";
   if (/pedidos\s?ya|pedidosya/.test(p)) return "pedidosya";
   if (/factura|finanz|pago|concilia|sunat|contab/.test(p)) return "finance";
   if (/\b(ci|build|compila|pipeline|tests?|pruebas?)\b/.test(p)) return "qa";
   if (/migraci|base de datos|\bsql\b|query|consulta|indice|tabla/.test(p)) return "database";
+  if (!repo) return "data";
   if (repo.kind === "frontend") return "frontend";
   if (repo.kind === "backend") return "backend";
   return "general";
@@ -41,17 +73,31 @@ export function isAnalysisOnly(prompt: string): boolean {
   return asksAnalysis && !asksChange;
 }
 
-export function buildPlannerPrompt(mission: string, repo: RepositoryConfig, base: string): string {
-  const roster = WORKERS.map((a) => `- ${a.id}: ${a.name}, ${a.role}. ${a.tagline}`).join("\n");
+export function mcpRules(servers: string[]): string {
+  if (!servers.length) return "";
+  return `
+Tienes acceso a servidores MCP con DATOS REALES DE PRODUCCIÓN (${servers.join(", ")}). Reglas obligatorias:
+- SOLO LECTURA: únicamente consultas de lectura (SELECT / GET). Nunca INSERT, UPDATE, DELETE, DDL, ni acciones que modifiquen datos o envíen algo.
+- Limita resultados (LIMIT / filtros por fecha) y prefiere agregados.
+- No copies datos personales sensibles (documentos, teléfonos, correos, tarjetas) en tu respuesta; resume.
+- Indica qué consulta usaste para cada cifra.`;
+}
+
+export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | null, base: string, team: AgentProfile[], mcp: string[] = []): string {
+  const roster = team.filter((a) => a.id !== "atlas" && a.id !== "vega").map((a) => `- ${a.id}: ${a.name}, ${a.role}. ${a.tagline}`).join("\n");
+  const where = repo
+    ? `Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.
+Explora brevemente la estructura del repositorio (máximo unos pocos comandos de lectura) para asignar bien el trabajo.`
+    : `Esta misión NO tiene repositorio: es de análisis / datos. Nadie modifica código; todos los pasos son "writes": false.${mcp.length ? " Asigna las consultas de datos a quien mejor encaje (p. ej. Nora para base de datos, Fiona para finanzas, Rafa/Piero para Rappi/PedidosYa)." : ""}`;
   return `Eres Atlas, lead del equipo de agentes de LRD. Tu trabajo AHORA es SOLO planificar (no edites archivos).
 
 Misión del usuario:
 """${mission}"""
 
-Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.
-Explora brevemente la estructura del repositorio (máximo unos pocos comandos de lectura) para asignar bien el trabajo.
+${where}
+${mcpRules(mcp)}
 
-Equipo disponible:
+Equipo disponible (usa el id en "agent"):
 ${roster}
 
 QA (Vega) y la revisión final (Atlas) las agrega el sistema automáticamente: NO las incluyas.
@@ -128,7 +174,11 @@ function hasCycle(steps: PlannedStep[]): boolean {
 }
 
 /** Plan base por reglas cuando el motor no devuelve JSON válido. Se informa explícitamente en la UI. */
-export function rulesPlan(prompt: string, repo: RepositoryConfig, area: string): MissionPlan {
+export function rulesPlan(prompt: string, repo: RepositoryConfig | null, area: string): MissionPlan {
+  if (!repo) {
+    const who: AgentId = ({ rappi: "rafa", pedidosya: "piero", finance: "fiona" } as Record<string, AgentId>)[area] ?? "nora";
+    return { deliverable: "analysis", steps: [{ id: "s1", agent: who, title: "Analizar datos", task: prompt, dependsOn: [], writes: false }], source: "rules" };
+  }
   const analysis = isAnalysisOnly(prompt);
   const specialist: Record<string, AgentId> = { rappi: "rafa", pedidosya: "piero", finance: "fiona", database: "nora" };
   const implementer: AgentId = repo.kind === "frontend" ? "mica" : "diego";

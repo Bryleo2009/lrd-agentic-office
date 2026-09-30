@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { getAgent } from "../../shared/agents";
+import { profile as getAgent } from "../settings";
 import type { AgentId } from "../../shared/types";
 import { insertHandoff, missionHandoffs } from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";

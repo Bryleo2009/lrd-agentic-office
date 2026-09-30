@@ -111,9 +111,9 @@ export class CodexJsonParser {
       }
       case "mcp_tool_call": {
         const name = `${item.server ?? "mcp"}.${item.tool ?? "tool"}`;
-        if (phase === "started") return [{ type: "TOOL_STARTED", title: `Usando ${name}`, tool: name, status: "running" }];
+        if (phase === "started") return [{ type: "TOOL_STARTED", title: `Consultando datos: ${item.server ?? "mcp"} · ${item.tool ?? ""}`, tool: name, detail: item.arguments ? clip(JSON.stringify(item.arguments), 600) : null, status: "running", metadata: { mcp: true, server: item.server } }];
         if (phase === "completed")
-          return [{ type: "TOOL_FINISHED", title: `${name} ${item.status === "failed" ? "falló" : "listo"}`, tool: name, status: item.status === "failed" ? "error" : "success" }];
+          return [{ type: "TOOL_FINISHED", title: item.status === "failed" ? "La consulta de datos falló" : "Datos recibidos", tool: name, detail: item.result ? clip(JSON.stringify(item.result), 3000) : item.error ? String(item.error.message ?? item.error) : null, status: item.status === "failed" ? "error" : "success", metadata: { mcp: true } }];
         return [];
       }
       case "web_search":

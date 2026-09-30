@@ -54,7 +54,9 @@ export class AgentRenderer {
   private sprites: Partial<Record<string, AnimatedSprite>> | null = null;
   private currentSprite: AnimatedSprite | null = null;
 
-  constructor(readonly def: AgentDefinition, appearance: Appearance) {
+  private tagName: Text | null = null;
+
+  constructor(public def: AgentDefinition, appearance: Appearance) {
     this.front = buildRigView(appearance, false);
     this.back = buildRigView(appearance, true);
     const sc = appearance.height;
@@ -64,13 +66,8 @@ export class AgentRenderer {
     this.body.addChild(this.ring, this.rigRoot);
 
     // Etiqueta
-    const name = new Text({ text: def.name, style: TAG_STYLE, resolution: 3 });
-    name.position.set(16, -7.5);
-    const w = name.width + 26;
-    this.tagBg.roundRect(0, -10.5, w, 21, 10.5).fill({ color: 0xffffff, alpha: 0.95 }).stroke({ width: 1, color: 0xe2e8f0 });
-    this.tagDot.circle(9, 0, 3.6).fill(parseInt(def.color.slice(1), 16));
-    this.tag.addChild(this.tagBg, this.tagDot, name);
-    this.tag.pivot.set(w / 2, 0);
+    this.tag.addChild(this.tagBg, this.tagDot);
+    this.buildTag(def);
     this.overlay.addChild(this.tag);
 
     // Burbuja
@@ -88,6 +85,31 @@ export class AgentRenderer {
     this.tag.cursor = "pointer";
 
     if (appearance.renderer === "spritesheet") void this.loadSpritesheet();
+  }
+
+  private buildTag(def: AgentDefinition): void {
+    this.tagName?.destroy();
+    const name = new Text({ text: def.name, style: TAG_STYLE, resolution: 3 });
+    name.position.set(16, -7.5);
+    this.tagName = name;
+    const w = name.width + 26;
+    this.tagBg.clear().roundRect(0, -10.5, w, 21, 10.5).fill({ color: 0xffffff, alpha: 0.95 }).stroke({ width: 1, color: 0xe2e8f0 });
+    this.tagDot.clear().circle(9, 0, 3.6).fill(parseInt(def.color.slice(1), 16));
+    this.tag.addChild(name);
+    this.tag.pivot.set(w / 2, 0);
+  }
+
+  /** Aplica un perfil personalizado (nombre, color, apariencia) sin reiniciar la oficina. */
+  setProfile(def: AgentDefinition, appearance: Appearance): void {
+    this.def = def;
+    this.buildTag(def);
+    if (this.sprites) return;
+    for (const c of this.rigRoot.removeChildren()) c.destroy({ children: true });
+    this.front = buildRigView(appearance, false);
+    this.back = buildRigView(appearance, true);
+    this.rigRoot.scale.set(appearance.height);
+    this.rigRoot.addChild(this.front.root, this.back.root);
+    this.setFacing(this.facing);
   }
 
   onClick(fn: () => void): void {

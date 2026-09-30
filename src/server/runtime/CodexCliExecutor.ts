@@ -28,6 +28,7 @@ export class CodexCliExecutor extends BaseCliExecutor {
       authenticated: null,
       authDetail: null,
       capabilities: {},
+      mcpServers: [],
       message: "",
       checkedAt: new Date().toISOString(),
     };
@@ -57,6 +58,8 @@ export class CodexCliExecutor extends BaseCliExecutor {
       color: /--color\b/.test(help),
     };
 
+    st.mcpServers = await this.listMcp();
+
     const a = await run(this.command, ["login", "status"], { timeoutMs: 15000 });
     const out = `${a.stdout}\n${a.stderr}`.trim();
     if (a.code === 0 && /logged in/i.test(out)) {
@@ -81,6 +84,24 @@ export class CodexCliExecutor extends BaseCliExecutor {
     return this.save(st);
   }
 
+  /** `codex mcp list --json`: sólo nombre, estado y tipo de transporte (nunca args/env, pueden tener credenciales). */
+  private async listMcp(): Promise<RuntimeStatus["mcpServers"]> {
+    const r = await run(this.command, ["mcp", "list", "--json"], { timeoutMs: 15000 });
+    if (r.code !== 0) return [];
+    try {
+      const arr = JSON.parse(r.stdout) as { name: string; enabled?: boolean; transport?: { type?: string } }[];
+      return arr.map((m) => ({ name: String(m.name), enabled: m.enabled !== false, transport: m.transport?.type ?? "?" }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Desactiva los MCP para esta invocación si la misión no los permite. */
+  private mcpArgs(session: AgentSession): string[] {
+    if (session.config.allowMcp) return [];
+    return (this.status?.mcpServers ?? []).filter((m) => m.enabled && /^[\w-]+$/.test(m.name)).flatMap((m) => ["-c", `mcp_servers.${m.name}.enabled=false`]);
+  }
+
   private save(st: RuntimeStatus): RuntimeStatus {
     this.status = st;
     this.checkedAt = Date.now();
@@ -94,6 +115,7 @@ export class CodexCliExecutor extends BaseCliExecutor {
     if (caps.cd) args.push("--cd", session.config.cwd);
     if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
     if (allowSandboxFlag && caps.sandbox) args.push("--sandbox", session.config.permission === "read-only" ? "read-only" : "workspace-write");
+    args.push(...this.mcpArgs(session));
     return args;
   }
 
@@ -121,7 +143,7 @@ export class CodexCliExecutor extends BaseCliExecutor {
     const caps = this.status?.capabilities ?? {};
     if (session.cliSessionId && caps.resume) {
       const sandbox = session.config.permission === "read-only" ? "read-only" : "workspace-write";
-      const args = ["exec", "resume", caps.json ? "--json" : "--experimental-json", "-c", `sandbox_mode="${sandbox}"`];
+      const args = ["exec", "resume", caps.json ? "--json" : "--experimental-json", "-c", `sandbox_mode="${sandbox}"`, ...this.mcpArgs(session)];
       if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
       args.push(session.cliSessionId);
       return { ...this.withPrompt(args, message), parser, label: "codex-resume" };

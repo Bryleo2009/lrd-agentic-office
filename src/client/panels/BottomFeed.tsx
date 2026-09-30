@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AGENTS, getAgent } from "../../shared/agents";
+import { agentOf as getAgent } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId } from "../../shared/types";
 import { eventTone, MISSION_STATUS, timeOf, typeLabel } from "../app/format";
@@ -8,7 +8,7 @@ import { useStore } from "../app/store";
 const HIDDEN = new Set(["COMMAND_OUTPUT", "TEST_OUTPUT", "SESSION_STARTED", "AGENT_JOINED_MEETING"]);
 
 export function EventRow({ e, onAgent }: { e: AgentRuntimeEvent; onAgent?: (id: AgentId) => void }) {
-  const a = e.agentId ? AGENTS.find((x) => x.id === e.agentId) : null;
+  const a = e.agentId ? getAgent(e.agentId) : null;
   return (
     <div className={`ev ${eventTone(e)}`}>
       <span className="ev-time">{timeOf(e.timestamp)}</span>
@@ -29,6 +29,7 @@ export function EventRow({ e, onAgent }: { e: AgentRuntimeEvent; onAgent?: (id: 
 }
 
 export function BottomFeed({ onAgent }: { onAgent: (id: AgentId) => void }) {
+  useStore((s) => s.team);
   const events = useStore((s) => s.events);
   const open = useStore((s) => s.feedOpen);
   const setOpen = useStore((s) => s.setFeedOpen);

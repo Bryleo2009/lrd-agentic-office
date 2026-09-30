@@ -6,6 +6,7 @@ import { OfficeEngine } from "../office/OfficeEngine";
 import { BottomFeed } from "../panels/BottomFeed";
 import { MissionHud } from "../panels/MissionHud";
 import { NewMissionPanel } from "../panels/NewMissionPanel";
+import { SettingsPanel } from "../panels/SettingsPanel";
 import { TopBar } from "../panels/TopBar";
 import { useStore } from "./store";
 import { connectWs, onServerMessage } from "./ws";
@@ -43,7 +44,10 @@ export function App() {
     if (!engine) return;
     const vc = visualRef.current!;
     const off = onServerMessage((m) => {
-      if (m.kind === "hello") vc.bootstrap(m.snapshot.missions);
+      if (m.kind === "hello") {
+        engine.applyTeam(m.snapshot.team ?? []);
+        vc.bootstrap(m.snapshot.missions);
+      } else if (m.kind === "team") engine.applyTeam(m.team);
       else if (m.kind === "event") vc.handle(m.event);
       else if (m.kind === "mission") vc.onMission(m.mission);
       else if (m.kind === "chat") vc.onChat(m.agentId, m.delta, m.done, m.error);
@@ -84,6 +88,7 @@ export function App() {
       <AgentDrawer engine={engine} onChatSent={(id) => visualRef.current?.onChatSent(id)} />
       <BottomFeed onAgent={focusAgent} />
       <NewMissionPanel />
+      <SettingsPanel engine={engine} />
       {toast && <div className={`toast ${toast.tone}`}>{toast.text}</div>}
     </div>
   );

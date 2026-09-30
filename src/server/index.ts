@@ -13,6 +13,7 @@ import { eventBus } from "./events/AgentEventBus";
 import { assertApiDisabled } from "./runtime/ApiExecutor";
 import { runtime } from "./runtime/RuntimeDetector";
 import { registerWs } from "./websocket/wsHub";
+import { repositoriesWithLocal, resetProfile, setRepoPath, team, updateProfile } from "./settings";
 
 void _sessions;
 assertApiDisabled();
@@ -24,10 +25,11 @@ async function snapshot(): Promise<Snapshot> {
   return {
     runtime: runtime.snapshot(),
     missions: repo.listMissions(30),
-    repositories: loadRepositories().repositories,
+    repositories: await repositoriesWithLocal(),
     config: publicConfig(),
     recentEvents: repo.recentEvents(250),
     sessions: repo.listSessions(60),
+    team: team(),
   };
 }
 
@@ -56,10 +58,9 @@ app.get("/api/missions/:id", async (req, reply) => {
 app.get("/api/missions/:id/events", async (req) => repo.missionEvents((req.params as { id: string }).id));
 
 app.post("/api/missions", async (req) => {
-  const b = (req.body ?? {}) as { prompt?: string; repositoryId?: string; baseBranch?: string; engine?: EngineChoice };
-  if (!b.repositoryId) throw new MissionError("Falta repositoryId");
+  const b = (req.body ?? {}) as { prompt?: string; repositoryId?: string | null; baseBranch?: string | null; engine?: EngineChoice; allowMcp?: boolean };
   const engine: EngineChoice = b.engine === "codex" || b.engine === "claude" ? b.engine : "auto";
-  return orchestrator.createMission({ prompt: b.prompt ?? "", repositoryId: b.repositoryId, baseBranch: b.baseBranch, engine });
+  return orchestrator.createMission({ prompt: b.prompt ?? "", repositoryId: b.repositoryId ?? "auto", baseBranch: b.baseBranch || null, engine, allowMcp: !!b.allowMcp });
 });
 
 app.post("/api/missions/:id/cancel", async (req) => {
@@ -80,6 +81,34 @@ app.get("/api/agents/:id/events", async (req) => {
   const id = (req.params as { id: string }).id;
   if (!isAgentId(id)) throw new MissionError("Agente desconocido", 404);
   return repo.agentEvents(id, 200);
+});
+
+// ---------------- equipo (personalización) ----------------
+app.get("/api/team", async () => team());
+app.put("/api/team/:id", async (req) => {
+  const id = (req.params as { id: string }).id;
+  if (!isAgentId(id)) throw new MissionError("Agente desconocido", 404);
+  const p = updateProfile(id, (req.body ?? {}) as Parameters<typeof updateProfile>[1]);
+  eventBus.broadcast({ kind: "team", team: team() });
+  return p;
+});
+app.post("/api/team/:id/reset", async (req) => {
+  const id = (req.params as { id: string }).id;
+  if (!isAgentId(id)) throw new MissionError("Agente desconocido", 404);
+  const p = resetProfile(id);
+  eventBus.broadcast({ kind: "team", team: team() });
+  return p;
+});
+
+// ---------------- repositorios: ruta local en esta PC ----------------
+app.get("/api/repositories", async () => repositoriesWithLocal());
+app.put("/api/repositories/:id/local-path", async (req) => {
+  const id = (req.params as { id: string }).id;
+  const b = (req.body ?? {}) as { path?: string | null };
+  const status = await setRepoPath(id, b.path ?? null);
+  const repositories = await repositoriesWithLocal();
+  eventBus.broadcast({ kind: "repositories", repositories });
+  return { status, repositories };
 });
 
 app.get("/api/events/:id", async (req, reply) => {

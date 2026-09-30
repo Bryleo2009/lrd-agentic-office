@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { ClaudeStreamParser } from "../src/server/runtime/parsers/claudeParser";
 import { CodexJsonParser } from "../src/server/runtime/parsers/codexParser";
 import { classifyCommand, unwrapShell } from "../src/server/runtime/parsers/common";
-import { parsePlan, rulesPlan, inferArea, isAnalysisOnly } from "../src/server/missions/MissionPlanner";
+import { parsePlan, rulesPlan, inferArea, inferRepo, isAnalysisOnly } from "../src/server/missions/MissionPlanner";
 import { MissionDagExecutor } from "../src/server/missions/MissionDagExecutor";
 import type { MissionStep, RepositoryConfig } from "../src/shared/types";
 
@@ -135,4 +135,29 @@ test("DAG omite dependientes de un nodo fallido", async () => {
   const { failed } = await dag.execute();
   assert.deepEqual(failed.map((f) => f.id), ["a"]);
   assert.deepEqual(skipped, ["b"]);
+});
+
+test("repo automático: elige por nombre, por tipo o sin repositorio para datos", () => {
+  const repos: RepositoryConfig[] = [
+    { ...repo, id: "lrd-back", name: "lrd-back", shortName: "back", kind: "backend" },
+    { ...repo, id: "lrd-front", name: "lrd-front", shortName: "front", kind: "frontend" },
+  ];
+  assert.equal(inferRepo("Valida el CI de lrd-front y corrige el problema.", repos, false).id, "lrd-front");
+  assert.equal(inferRepo("El botón del checkout se ve mal en mobile", repos, false).id, "lrd-front");
+  assert.equal(inferRepo("Revisa por qué Rappi no manda el código de entrega", repos, false).id, "lrd-back");
+  assert.equal(inferRepo("¿Cuántas ventas tuvimos ayer por canal? Dame el ticket promedio", repos, true).id, "none");
+  assert.equal(inferRepo("¿Cuántas ventas tuvimos ayer por canal?", repos, false).id, "none");
+});
+
+test("parser: llamadas MCP se muestran como consultas de datos", () => {
+  const c = new ClaudeStreamParser("/wt");
+  const evs = [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "m1", name: "mcp__prod-db__query", input: { sql: "SELECT 1" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "m1", content: "[{\"n\":1}]" }] } },
+  ].flatMap((l) => c.parseLine(JSON.stringify(l)));
+  assert.equal(evs[0].title, "Consultando datos: prod-db · query");
+  assert.equal(evs[1].type, "TOOL_FINISHED");
+  const x = new CodexJsonParser("/wt");
+  const e2 = x.parseLine(JSON.stringify({ type: "item.started", item: { id: "1", type: "mcp_tool_call", server: "prod", tool: "sql", status: "in_progress" } }));
+  assert.equal((e2[0].metadata as any).mcp, true);
 });

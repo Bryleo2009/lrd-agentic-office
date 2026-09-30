@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, AgentSessionInfo, Mission, PublicConfig, RepositoryConfig, RuntimeStatus, Snapshot } from "../../shared/types";
+import type { AgentId, AgentProfile, AgentSessionInfo, Mission, PublicConfig, RepositoryConfig, RuntimeStatus, Snapshot } from "../../shared/types";
 
 export interface ChatLine {
   id: string;
@@ -20,6 +20,8 @@ interface State {
   config: PublicConfig | null;
   events: AgentRuntimeEvent[];
   sessions: AgentSessionInfo[];
+  team: AgentProfile[];
+  settingsOpen: boolean;
   chats: Partial<Record<AgentId, ChatLine[]>>;
   chatBusy: Partial<Record<AgentId, boolean>>;
   selected: AgentId | null;
@@ -31,6 +33,9 @@ interface State {
   addEvent(e: AgentRuntimeEvent): void;
   upsertMission(m: Mission): void;
   setRuntime(r: RuntimeStatus[]): void;
+  setTeam(t: AgentProfile[]): void;
+  setRepositories(r: RepositoryConfig[]): void;
+  setSettingsOpen(v: boolean): void;
   upsertSession(s: AgentSessionInfo): void;
   setConnected(v: boolean): void;
   select(id: AgentId | null): void;
@@ -52,6 +57,8 @@ export const useStore = create<State>((set, get) => ({
   config: null,
   events: [],
   sessions: [],
+  team: [],
+  settingsOpen: false,
   chats: {},
   chatBusy: {},
   selected: null,
@@ -78,6 +85,7 @@ export const useStore = create<State>((set, get) => ({
       config: s.config,
       events: s.recentEvents.slice(-MAX_EVENTS),
       sessions: s.sessions,
+      team: s.team ?? [],
       chats,
     });
   },
@@ -100,6 +108,15 @@ export const useStore = create<State>((set, get) => ({
   },
   setRuntime(runtime) {
     set({ runtime });
+  },
+  setTeam(team) {
+    set({ team });
+  },
+  setRepositories(repositories) {
+    set({ repositories });
+  },
+  setSettingsOpen(settingsOpen) {
+    set({ settingsOpen });
   },
   upsertSession(s) {
     const others = get().sessions.filter((x) => !(x.missionId === s.missionId && x.agentId === s.agentId));

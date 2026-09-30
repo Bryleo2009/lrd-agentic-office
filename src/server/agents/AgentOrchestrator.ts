@@ -1,29 +1,35 @@
 import { customAlphabet } from "nanoid";
-import { getAgent } from "../../shared/agents";
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, EngineChoice, Mission, MissionStep, Provider, RepositoryConfig } from "../../shared/types";
+import fs from "node:fs";
+import path from "node:path";
+import { NO_REPO, type AgentId, type EngineChoice, type Mission, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
 import { config, loadRepositories, paths } from "../config";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
 import { gitManager, GitError, slugify } from "../integrations/git/GitWorktreeManager";
 import { github } from "../integrations/github/GitHubAdapter";
 import { MissionDagExecutor } from "../missions/MissionDagExecutor";
-import { buildPlannerPrompt, inferArea, isAnalysisOnly, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { buildPlannerPrompt, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { detectQa, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
 import { firstLine } from "../runtime/parsers/common";
 import { runtime } from "../runtime/RuntimeDetector";
 import { messageBus, type Handoff } from "./AgentMessageBus";
 import { sessions } from "./AgentSession";
+import { profile as getAgent, team } from "../settings";
 
 const missionIdGen = customAlphabet("0123456789ABCDEF", 5);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface CreateMissionInput {
   prompt: string;
-  repositoryId: string;
-  baseBranch?: string;
+  /** Id, "auto" (lo decide el sistema) o "none" (sin repositorio: análisis/datos). Opcional. */
+  repositoryId?: string | null;
+  /** Opcional: por defecto la rama base configurada del repo. */
+  baseBranch?: string | null;
   engine?: EngineChoice;
+  /** Permitir datos reales vía MCP (sólo lectura). */
+  allowMcp?: boolean;
 }
 
 interface MissionRuntime {
@@ -45,6 +51,11 @@ export class MissionError extends Error {
  */
 export class AgentOrchestrator {
   private active = new Map<string, MissionRuntime>();
+
+  /** Nombres de servidores MCP habilitados en el motor dado. */
+  private mcpNames(provider: Provider): string[] {
+    return (runtime.snapshot().find((s) => s.provider === provider)?.mcpServers ?? []).filter((m) => m.enabled).map((m) => m.name);
+  }
 
   private repoConfig(id: string): RepositoryConfig {
     const r = loadRepositories().repositories.find((x) => x.id === id);
@@ -86,9 +97,6 @@ export class AgentOrchestrator {
   async createMission(input: CreateMissionInput): Promise<Mission> {
     const prompt = input.prompt?.trim();
     if (!prompt) throw new MissionError("La misión está vacía");
-    const r = this.repoConfig(input.repositoryId);
-    const base = input.baseBranch || r.defaultBase;
-    if (!r.allowedBases.includes(base)) throw new MissionError(`Rama base no permitida: ${base}`);
     const engine: EngineChoice = input.engine ?? "auto";
     await runtime.detect();
     const provider = runtime.resolve(engine);
@@ -96,18 +104,34 @@ export class AgentOrchestrator {
       const st = runtime.snapshot().find((s) => s.provider === provider);
       throw new MissionError(`${st?.label ?? provider} no disponible: ${st?.message ?? "sin detalle"}. No se usará API como alternativa.`, 409);
     }
+    const mcp = this.mcpNames(provider);
+    const allowMcp = !!input.allowMcp && mcp.length > 0;
+    const requested = (input.repositoryId ?? "").trim();
+    const repoSelection: Mission["repoSelection"] = requested && requested !== "auto" ? "manual" : "auto";
+    let repoReason = "";
+    let repoId = requested;
+    if (repoSelection === "auto") {
+      const pick = inferRepo(prompt, loadRepositories().repositories, allowMcp);
+      repoId = pick.id;
+      repoReason = pick.reason;
+    }
+    const r = repoId === NO_REPO ? null : this.repoConfig(repoId);
+    const base = r ? input.baseBranch || r.defaultBase : "";
+    if (r && !r.allowedBases.includes(base)) throw new MissionError(`Rama base no permitida: ${base}`);
     const id = missionIdGen();
     const area = inferArea(prompt, r);
     const now = new Date().toISOString();
     const mission: Mission = {
       id,
       prompt,
-      repositoryId: r.id,
+      repositoryId: r?.id ?? NO_REPO,
+      repoSelection,
+      allowMcp,
       baseBranch: base,
       engine,
       provider,
       area,
-      branch: `agentic/${area}/${slugify(prompt)}-${id}`,
+      branch: r ? `agentic/${area}/${slugify(prompt)}-${id}` : null,
       worktree: null,
       status: "created",
       error: null,
@@ -121,7 +145,17 @@ export class AgentOrchestrator {
       steps: [],
     };
     repo.insertMission(mission);
-    this.emit(id, "atlas", { provider: "system", sessionId: null, type: "MISSION_CREATED", title: `Nueva misión ${id}`, detail: prompt, status: "info", metadata: { repositoryId: r.id, base, provider } });
+    this.emit(id, "atlas", { provider: "system", sessionId: null, type: "MISSION_CREATED", title: `Nueva misión ${id}`, detail: prompt, status: "info", metadata: { repositoryId: r?.id ?? NO_REPO, base, provider, repoSelection, allowMcp } });
+    if (repoSelection === "auto")
+      this.emit(id, "atlas", {
+        provider: "system",
+        sessionId: null,
+        type: "AGENT_STATUS",
+        title: r ? `Repositorio elegido: ${r.name} (${base})` : "Misión sin repositorio (análisis / datos)",
+        detail: `Selección automática: ${repoReason}.`,
+        status: "info",
+      });
+    if (allowMcp) this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `Datos reales vía MCP: ${mcp.join(", ")} (sólo lectura)`, status: "warning" });
     this.pushMission(id);
     const rt: MissionRuntime = { cancelled: false, qaSignal: { cancelled: false }, lastWriter: null };
     this.active.set(id, rt);
@@ -140,9 +174,10 @@ export class AgentOrchestrator {
   }
 
   // ------------------------------------------------------------------
-  private async run(id: string, r: RepositoryConfig, rt: MissionRuntime): Promise<void> {
+  private async run(id: string, r: RepositoryConfig | null, rt: MissionRuntime): Promise<void> {
     const mission = repo.getMission(id)!;
     try {
+      if (!r) return await this.runWithoutRepo(id, mission, rt);
       // 1) Git: fetch + rama + worktree
       this.setMission(id, { status: "preparing" });
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STARTED", title: "Preparando espacio de trabajo", status: "running" });
@@ -255,6 +290,41 @@ export class AgentOrchestrator {
     }
   }
 
+  /** Misión sin repositorio: análisis / datos (MCP). Sin git, sin QA, sin commit. */
+  private async runWithoutRepo(id: string, mission: Mission, rt: MissionRuntime): Promise<void> {
+    const cwd = path.join(paths.runs, id, "workspace");
+    fs.mkdirSync(cwd, { recursive: true });
+    this.setMission(id, { status: "planning" });
+    const planStep = this.newStep(id, "plan", "atlas", "Planificar misión", mission.prompt, [], false, "plan");
+    repo.addStep(planStep, 0);
+    const plan = await this.plan(id, null, cwd, mission, planStep, rt);
+    if (rt.cancelled) throw new MissionError("Cancelada");
+    plan.deliverable = "analysis";
+    for (const s of plan.steps) s.writes = false;
+    const steps = this.materializePlan(id, plan, mission);
+    steps.forEach((s, i) => repo.addStep(s, i + 1));
+    this.setMission(id, { status: "running", planSource: plan.source });
+    this.emit(id, "atlas", {
+      provider: plan.source === "ai" ? mission.provider : "system",
+      sessionId: null,
+      type: "PLAN_CREATED",
+      title: `Plan: ${steps.filter((s) => s.kind === "agent").map((s) => getAgent(s.agentId).name).join(" → ")}`,
+      detail: steps.map((s) => `• ${getAgent(s.agentId).name}: ${s.title}`).join("\n"),
+      status: "success",
+      metadata: { source: plan.source, noRepo: true },
+    });
+    const dag = new MissionDagExecutor(steps, {
+      isCancelled: () => rt.cancelled,
+      onSkip: (s, reason) => this.setStep(id, s, { status: "skipped", error: reason }),
+      run: (s) => this.runStep(id, null, cwd, s, steps, rt),
+    });
+    const { failed } = await dag.execute();
+    if (rt.cancelled) throw new MissionError("Cancelada");
+    if (failed.length) throw new MissionError(`${getAgent(failed[0].agentId).name} no pudo completar "${failed[0].title}": ${failed[0].error ?? "error"}`);
+    this.setMission(id, { status: "done" });
+    this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true } });
+  }
+
   private newStep(missionId: string, id: string, agentId: AgentId, title: string, task: string, dependsOn: string[], writes: boolean, kind: MissionStep["kind"]): MissionStep {
     return { id: `${missionId}-${id}`, missionId, agentId, title, task, dependsOn: dependsOn.map((d) => `${missionId}-${d}`), writes, kind, status: "pending", provider: null, sessionId: null, result: null, error: null, startedAt: null, finishedAt: null };
   }
@@ -273,11 +343,11 @@ export class AgentOrchestrator {
   }
 
   // ------------------------------------------------------------------
-  private async plan(id: string, r: RepositoryConfig, wt: string, mission: Mission, step: MissionStep, rt: MissionRuntime): Promise<MissionPlan> {
+  private async plan(id: string, r: RepositoryConfig | null, wt: string, mission: Mission, step: MissionStep, rt: MissionRuntime): Promise<MissionPlan> {
     const provider = runtime.forAgent("atlas", mission.provider, mission.engine);
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     this.emit(id, "atlas", { provider, sessionId: null, type: "AGENT_STATUS", title: "Planificando la misión", status: "running", metadata: { visual: "THINKING" } });
-    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch), "Planificar", rt, step);
+    const res = await this.runAgent(id, "atlas", provider, wt, "read-only", buildPlannerPrompt(mission.prompt, r, mission.baseBranch, team(), mission.allowMcp ? this.mcpNames(provider) : []), "Planificar", rt, step);
     if (!res.ok) {
       this.setStep(id, step, { status: "failed", error: res.error, finishedAt: new Date().toISOString() });
       throw new MissionError(`Atlas no pudo planificar: ${res.error}`);
@@ -293,11 +363,11 @@ export class AgentOrchestrator {
   }
 
   /** Ejecuta un paso del DAG según su tipo. */
-  private async runStep(id: string, r: RepositoryConfig, wt: string, step: MissionStep, all: MissionStep[], rt: MissionRuntime): Promise<void> {
+  private async runStep(id: string, r: RepositoryConfig | null, wt: string, step: MissionStep, all: MissionStep[], rt: MissionRuntime): Promise<void> {
     if (rt.cancelled) return;
     // Entregar handoffs reales de las dependencias
     await this.deliverHandoffs(id, step, all);
-    if (step.kind === "qa") return this.runQaStep(id, r, wt, step, all, rt);
+    if (step.kind === "qa" && r) return this.runQaStep(id, r, wt, step, all, rt);
     if (step.kind === "review") return this.runReviewStep(id, wt, step, all, rt);
 
     const mission = repo.getMission(id)!;
@@ -352,7 +422,7 @@ export class AgentOrchestrator {
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-Repositorio: ${m.repositoryId} · rama de trabajo ${m.branch} (base ${m.baseBranch}).
+${m.repositoryId === NO_REPO ? "Misión sin repositorio (análisis / datos)." : `Repositorio: ${m.repositoryId} · rama de trabajo ${m.branch} (base ${m.baseBranch}).`}${m.allowMcp ? mcpRules(this.mcpNames(m.provider)) : ""}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -377,7 +447,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
   ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     let entry;
     try {
-      entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission });
+      entry = await sessions.getOrCreate({ missionId, agentId, provider, cwd, permission, allowMcp: !!repo.getMission(missionId)?.allowMcp });
     } catch (e) {
       const msg = (e as Error).message;
       this.emit(missionId, agentId, { provider, sessionId: null, type: "AGENT_BLOCKED", title: `${getAgent(agentId).name} bloqueado`, detail: msg, status: "error" });
@@ -526,7 +596,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
   private async runReviewStep(id: string, wt: string, step: MissionStep, all: MissionStep[], rt: MissionRuntime): Promise<void> {
     const mission = repo.getMission(id)!;
     this.setStep(id, step, { status: "running", startedAt: new Date().toISOString() });
-    const diff = await gitManager.diffStat(wt);
+    const diff = mission.repositoryId === NO_REPO ? { stat: "", files: [] as string[], patch: "" } : await gitManager.diffStat(wt);
     if (diff.files.length)
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_DIFF", title: `Diff final: ${diff.files.length} archivo(s)`, detail: diff.stat, status: "info", metadata: { files: diff.files } });
     const findings = all.filter((s) => s.kind === "agent" && s.result).map((s) => `## ${getAgent(s.agentId).name} — ${s.title}\n${s.result}`).join("\n\n");
@@ -569,9 +639,11 @@ No modifiques archivos. Responde en español, conciso (máx. 15 líneas). Termin
       const st = runtime.snapshot().find((s) => s.provider === provider);
       throw new MissionError(`${st?.label ?? provider} no disponible: ${st?.message ?? ""}`, 409);
     }
-    const cwd = mission?.worktree ?? existing?.session.config.cwd ?? paths.runs;
+    const noRepoCwd = mission && mission.repositoryId === NO_REPO ? path.join(paths.runs, mission.id, "workspace") : null;
+    if (noRepoCwd) fs.mkdirSync(noRepoCwd, { recursive: true });
+    const cwd = mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
     const mid = mission?.id ?? null;
-    const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only" }));
+    const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", allowMcp: !!mission?.allowMcp }));
     if (entry.busy) throw new MissionError(`${getAgent(agentId).name} está respondiendo otro mensaje`, 409);
     entry.session.config.permission = "read-only";
 

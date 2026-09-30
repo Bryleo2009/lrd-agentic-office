@@ -3,6 +3,7 @@ import path from "node:path";
 import type { RepositoryConfig } from "../../../shared/types";
 import { loadRepositories, paths } from "../../config";
 import { run, tail } from "../../runtime/processUtils";
+import { repoLocalPath } from "../../settings";
 
 export class GitError extends Error {
   constructor(message: string, public readonly output: string) {
@@ -44,12 +45,23 @@ export function slugify(s: string, max = 32): string {
 const STOP = new Set(["por", "que", "the", "los", "las", "del", "una", "uno", "con", "para", "revisa", "esta", "este", "and", "prepara"]);
 
 export class GitWorktreeManager {
+  /** Tu clon local (Ajustes) si está configurado; si no, un clon gestionado en el workspace. */
   repoPath(repo: RepositoryConfig): string {
-    return path.join(paths.repos, repo.id);
+    return repoLocalPath(repo.id) ?? path.join(paths.repos, repo.id);
   }
 
-  /** Clona si no existe. */
+  isUserRepo(repo: RepositoryConfig): boolean {
+    return repoLocalPath(repo.id) !== null;
+  }
+
+  /** Clona si no existe. Con ruta local nunca clona: usa tu repositorio tal cual (no toca tu rama ni tus cambios). */
   async ensureClone(repo: RepositoryConfig): Promise<string> {
+    const local = repoLocalPath(repo.id);
+    if (local) {
+      if (!fs.existsSync(local)) throw new GitError(`La ruta local de ${repo.name} no existe: ${local}`, "");
+      await git(["rev-parse", "--git-dir"], local);
+      return local;
+    }
     const p = this.repoPath(repo);
     if (fs.existsSync(path.join(p, ".git")) || fs.existsSync(path.join(p, "HEAD"))) return p;
     fs.mkdirSync(paths.repos, { recursive: true });
@@ -58,7 +70,8 @@ export class GitWorktreeManager {
   }
 
   async fetch(repo: RepositoryConfig): Promise<void> {
-    await git(["fetch", "origin", "--prune"], this.repoPath(repo), 10 * 60_000);
+    // En tu repo local no se hace --prune para no alterar tus referencias remotas.
+    await git(this.isUserRepo(repo) ? ["fetch", "origin"] : ["fetch", "origin", "--prune"], this.repoPath(repo), 10 * 60_000);
   }
 
   async remoteBranchExists(repo: RepositoryConfig, branch: string): Promise<boolean> {

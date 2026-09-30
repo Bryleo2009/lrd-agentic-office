@@ -46,6 +46,10 @@ else {
   info(`flags: ${Object.entries(claude.capabilities).filter(([, v]) => v).map(([k]) => k).join(", ")}`);
 }
 
+for (const st of [codex, claude]) {
+  if (st.mcpServers.length) info(`${st.label} · MCP: ${st.mcpServers.map((m) => `${m.name}${m.enabled ? "" : " (deshabilitado)"}`).join(", ")}`);
+}
+
 const usable = [codex, claude].filter((s) => s.enabled && s.installed && s.authenticated !== false);
 console.log("");
 usable.length ? ok(`Motores IA disponibles: ${usable.map((s) => s.label).join(", ")}`) : bad("Ningún motor IA disponible. Se necesita al menos Codex CLI o Claude Code autenticado.");

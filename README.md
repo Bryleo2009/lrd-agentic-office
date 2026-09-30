@@ -54,6 +54,31 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
 4. Push y PR sólo si los habilitas en `.env` (`GITHUB_PUSH_ENABLED=true`, `GITHUB_PR_ENABLED=true`).
 5. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
+### Repositorio y rama opcionales
+
+En *Nueva misión* el repositorio y la rama pueden quedar en **Automático**: se elige el repo por el texto de la misión
+(nombre del repo, "front"/"back", palabras como *checkout*, *webhook*, *Rappi*…) y la rama por defecto del repo (`release/fase2`).
+La elección se anuncia en la oficina. Con **Sin repo (análisis / datos)** nadie toca código: el equipo sólo investiga y responde.
+
+### Tus repos locales (Ajustes → Repositorios en esta PC)
+
+Pon la ruta de tu clon de `lrd-front` y `lrd-back` (p. ej. `C:\proyectos\lrd-front`). La oficina usará tu clon para
+`git fetch` y para crear los worktrees de cada misión: **tu rama actual y tus cambios sin commitear no se tocan**
+(los worktrees viven en `~/.lrd-agentic-office/worktrees`) y las ramas `agentic/…` aparecen en tu repo para que las revises.
+
+### Datos reales vía MCP (Ajustes → Datos)
+
+Si tienes un servidor MCP configurado en Codex (`codex mcp list`) o Claude Code (`claude mcp list`), la oficina lo detecta
+(sólo nombre y estado; nunca lee sus credenciales). Al crear una misión marca **Usar datos reales vía MCP (solo lectura)**.
+Sin esa marca los MCP se desactivan para la misión. Con ella, los agentes reciben reglas estrictas: sólo lecturas, con límites,
+sin exponer datos personales y citando la consulta usada. **Recomendación:** que el MCP de producción use un usuario de BD de solo lectura.
+
+### Personalizar el equipo (Ajustes → Equipo, o *Personalizar* en el drawer)
+
+Nombre, sexo, rol, descripción, responsabilidades, color, motor preferido y apariencia (piel, peinado, color de cabello,
+vestimenta, colores, accesorio, barba, estatura, complexión) con vista previa. Se aplica en vivo en la oficina y en los prompts.
+Se guarda en `~/.lrd-agentic-office/settings.json`.
+
 Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil para hacer zoom; **Centrar oficina** para encuadrar.
 
 ## Configuración (`.env`)

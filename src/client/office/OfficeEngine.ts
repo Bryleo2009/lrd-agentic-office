@@ -1,6 +1,6 @@
 import { Application, Container, Rectangle } from "pixi.js";
 import { AGENTS } from "../../shared/agents";
-import type { AgentId } from "../../shared/types";
+import type { AgentId, AgentProfile, Appearance as AppearanceT } from "../../shared/types";
 import { AgentBrain } from "../agents/AgentBrain";
 import { AgentEntity } from "../agents/AgentEntity";
 import type { Action } from "../agents/AgentAnimator";
@@ -46,6 +46,7 @@ export class OfficeEngine {
   private fpsSamples: number[] = [];
   private appearances = new Map<AgentId, Appearance>();
   private portraits = new Map<AgentId, string>();
+  private profileKeys = new Map<AgentId, string>();
 
   async init(el: HTMLElement): Promise<void> {
     await this.app.init({
@@ -146,6 +147,23 @@ export class OfficeEngine {
     }
   }
 
+  /** Aplica la personalización del equipo (nombre, color, apariencia) en vivo. */
+  applyTeam(team: AgentProfile[]): void {
+    for (const p of team) {
+      const e = this.entities.get(p.id);
+      if (!e) continue;
+      const key = JSON.stringify([p.name, p.color, p.appearance]);
+      if (this.profileKeys.get(p.id) === key) continue;
+      const first = !this.profileKeys.has(p.id);
+      this.profileKeys.set(p.id, key);
+      const prev = JSON.stringify(this.appearances.get(p.id));
+      this.appearances.set(p.id, p.appearance);
+      if (first && prev === JSON.stringify(p.appearance) && e.renderer.def.name === p.name && e.renderer.def.color === p.color) continue;
+      e.renderer.setProfile(p, p.appearance);
+      this.portraits.delete(p.id);
+    }
+  }
+
   // ---------------- API para React ----------------
 
   onSelect(cb: (id: AgentId | null) => void): void {
@@ -184,10 +202,10 @@ export class OfficeEngine {
   }
 
   /** Retrato del personaje (render real del rig) para el drawer. */
-  async portrait(id: AgentId): Promise<string> {
-    const cached = this.portraits.get(id);
+  async portrait(id: AgentId, override?: AppearanceT): Promise<string> {
+    const cached = override ? null : this.portraits.get(id);
     if (cached) return cached;
-    const a = this.appearances.get(id) ?? DEFAULT_APPEARANCE;
+    const a = override ?? this.appearances.get(id) ?? DEFAULT_APPEARANCE;
     const v = buildRigView(a, false);
     const c = new Container();
     v.root.scale.set(2.4);
@@ -196,7 +214,7 @@ export class OfficeEngine {
     c.addChild(v.root);
     const url = await this.app.renderer.extract.base64({ target: c, frame: new Rectangle(-44, -168, 96, 96), resolution: 2 });
     c.destroy({ children: true });
-    this.portraits.set(id, url);
+    if (!override) this.portraits.set(id, url);
     return url;
   }
 

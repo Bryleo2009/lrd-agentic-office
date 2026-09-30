@@ -18,19 +18,22 @@ export function NewMissionPanel() {
   const toast = useStore((s) => s.showToast);
   const enabled = useMemo(() => repos.filter((r) => r.enabled), [repos]);
   const [prompt, setPrompt] = useState("");
-  const [repoId, setRepoId] = useState("");
+  const [repoId, setRepoId] = useState("auto");
   const [base, setBase] = useState("");
+  const [allowMcp, setAllowMcp] = useState(false);
   const [engine, setEngine] = useState<EngineChoice>("auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!repoId && enabled.length) setRepoId(enabled[0].id);
-  }, [enabled, repoId]);
   const repo = enabled.find((r) => r.id === repoId);
   useEffect(() => {
-    if (repo && !repo.allowedBases.includes(base)) setBase(repo.defaultBase);
+    if (base && (!repo || !repo.allowedBases.includes(base))) setBase("");
   }, [repo, base]);
+  const effEngine = engine === "auto" ? config?.aiEngineDefault ?? "codex" : engine;
+  const mcp = runtime.find((r) => r.provider === effEngine)?.mcpServers.filter((m) => m.enabled) ?? [];
+  useEffect(() => {
+    if (repoId === "none" && mcp.length) setAllowMcp(true);
+  }, [repoId, mcp.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -48,11 +51,11 @@ export function NewMissionPanel() {
   const autoLabel = `Automático (${config?.aiEngineDefault === "claude" ? "Claude Code" : "Codex"})`;
 
   const submit = async () => {
-    if (!prompt.trim() || !repo) return;
+    if (!prompt.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      await api.createMission({ prompt: prompt.trim(), repositoryId: repo.id, baseBranch: base, engine });
+      await api.createMission({ prompt: prompt.trim(), repositoryId: repoId, baseBranch: base || null, engine, allowMcp: allowMcp && mcp.length > 0 });
       setPrompt("");
       setOpen(false);
       toast("Misión creada: el equipo se pone en marcha", "info");
@@ -96,16 +99,20 @@ export function NewMissionPanel() {
           <label>
             <span>Repositorio</span>
             <select value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+              <option value="auto">Automático</option>
               {enabled.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name}
+                  {r.localPath ? " · tu clon" : ""}
                 </option>
               ))}
+              <option value="none">Sin repo (análisis / datos)</option>
             </select>
           </label>
           <label>
             <span>Rama base</span>
-            <select value={base} onChange={(e) => setBase(e.target.value)}>
+            <select value={base} onChange={(e) => setBase(e.target.value)} disabled={repoId === "none"}>
+              <option value="">{repo ? `Por defecto (${repo.defaultBase})` : repoId === "none" ? "No aplica" : "Por defecto del repo"}</option>
               {repo?.allowedBases.map((b) => (
                 <option key={b} value={b}>
                   {b}
@@ -122,8 +129,19 @@ export function NewMissionPanel() {
             </select>
           </label>
         </div>
+        {mcp.length > 0 && (
+          <label className="check mcp-check">
+            <input type="checkbox" checked={allowMcp} onChange={(e) => setAllowMcp(e.target.checked)} />
+            <span>
+              Usar datos reales vía MCP <b>(solo lectura)</b>: {mcp.map((m) => m.name).join(", ")}
+            </span>
+          </label>
+        )}
         <div className="fineprint">
-          Se crea una rama <code>agentic/…</code> en un worktree aislado desde <code>{base || "…"}</code>. La rama base nunca se modifica.
+          {repoId === "auto" && <>Repositorio y rama son opcionales: si los dejas en automático, Atlas elige según la misión (o trabaja sin repo si es de datos). </>}
+          {repoId === "none"
+            ? "Sin repositorio: nadie modifica código; el equipo analiza y responde. "
+            : <>Se crea una rama <code>agentic/…</code> en un worktree aislado desde <code>{base || repo?.defaultBase || "la rama por defecto"}</code>. La rama base nunca se modifica. </>}
           Push {config?.githubPushEnabled ? "habilitado" : "deshabilitado"} · PR {config?.githubPrEnabled ? "habilitado" : "deshabilitado"}.
         </div>
         {error && <div className="error-box">{error}</div>}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAgent } from "../../shared/agents";
+import { agentOf as getAgent } from "../app/team";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId } from "../../shared/types";
 import { api } from "../app/api";
@@ -36,6 +36,7 @@ const ACTION_LABEL: Record<string, string> = {
 
 export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | null; onChatSent: (id: AgentId) => void }) {
   const selected = useStore((s) => s.selected);
+  useStore((s) => s.team);
   const select = useStore((s) => s.select);
   const [tab, setTab] = useState<Tab>("activity");
   const [portrait, setPortrait] = useState<string | null>(null);
@@ -81,6 +82,9 @@ export function AgentDrawer({ engine, onChatSent }: { engine: OfficeEngine | nul
             </div>
           )}
         </div>
+        <button className="btn tiny ghost customize" onClick={() => useStore.getState().setSettingsOpen(true)} title="Personalizar empleado">
+          Personalizar
+        </button>
         <button className="icon-btn" onClick={() => select(null)} aria-label="Cerrar">
           ×
         </button>
@@ -127,8 +131,8 @@ function AgentFacts({ agentId }: { agentId: AgentId }) {
     ],
     ["Session", session?.sessionId ? <code title={session.sessionId}>{session.sessionId.slice(0, 13)}…</code> : "—"],
     ["Misión", mission ? <>#{mission.id} {isLive(mission.status) ? "· en curso" : `· ${mission.status}`}</> : "—"],
-    ["Repositorio", mission?.repositoryId ?? "—"],
-    ["Rama base", mission?.baseBranch ?? "—"],
+    ["Repositorio", mission ? (mission.repositoryId === "none" ? "Sin repositorio (datos)" : `${mission.repositoryId}${mission.repoSelection === "auto" ? " (auto)" : ""}`) : "—"],
+    ["Rama base", mission?.baseBranch || "—"],
     ["Rama agentic", mission?.branch ? <code>{mission.branch}</code> : "—"],
     ["Worktree", mission?.worktree ? <code title={mission.worktree}>…{mission.worktree.slice(-34)}</code> : "—"],
     ["Actividad actual", step?.status === "running" ? step.title : lastEv ? `${lastEv.title} (${timeOf(lastEv.timestamp)})` : "Vida ambiental"],

@@ -3,6 +3,7 @@ import { config } from "../config";
 import type { AgentExecutor } from "./AgentExecutor";
 import { ClaudeCodeExecutor } from "./ClaudeCodeExecutor";
 import { CodexCliExecutor } from "./CodexCliExecutor";
+import { profile } from "../settings";
 
 /**
  * Registro de motores. AI_PROVIDER_MODE=cli → sólo CLIs oficiales.
@@ -38,7 +39,7 @@ export class RuntimeDetector {
   /** Motor efectivo para un agente dentro de una misión (AGENT_ENGINES permite mezclar). */
   forAgent(agentId: AgentId, missionProvider: Provider, engineChoice: EngineChoice): Provider {
     if (engineChoice !== "auto") return missionProvider;
-    const pref = config.agentEngines[agentId];
+    const pref = profile(agentId).engine ?? config.agentEngines[agentId];
     if (pref && this.isUsable(pref)) return pref;
     return missionProvider;
   }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { getAgent } from "../../shared/agents";
+import { agentOf as getAgent } from "../app/team";
 import { api } from "../app/api";
 import { isLive, MISSION_STATUS, STEP_STATUS } from "../app/format";
 import { useStore } from "../app/store";
@@ -9,6 +9,7 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
   const missions = useStore((s) => s.missions);
   const order = useStore((s) => s.missionOrder);
   const toast = useStore((s) => s.showToast);
+  useStore((s) => s.team);
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < 760);
   const current = order.map((id) => missions[id]).find((m) => m && isLive(m.status)) ?? missions[order[0]];
   if (!current) return null;

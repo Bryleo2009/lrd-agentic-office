@@ -34,11 +34,12 @@ class AgentSessionRegistry {
     return best;
   }
 
-  async getOrCreate(opts: { missionId: string | null; agentId: AgentId; provider: Provider; cwd: string; permission: PermissionProfile }): Promise<Entry> {
+  async getOrCreate(opts: { missionId: string | null; agentId: AgentId; provider: Provider; cwd: string; permission: PermissionProfile; allowMcp?: boolean }): Promise<Entry> {
     const k = this.key(opts.missionId, opts.agentId);
     const ex = this.map.get(k);
     if (ex && ex.session.provider === opts.provider && ex.session.config.cwd === opts.cwd) {
       ex.session.config.permission = opts.permission;
+      ex.session.config.allowMcp = !!opts.allowMcp;
       return ex;
     }
     const exec = runtime.get(opts.provider);
@@ -49,6 +50,7 @@ class AgentSessionRegistry {
       permission: opts.permission,
       runDir: path.join(paths.runs, opts.missionId ?? "_chat", opts.agentId),
       timeoutMs: config.stepTimeoutMs,
+      allowMcp: !!opts.allowMcp,
     });
     const info: AgentSessionInfo = {
       missionId: opts.missionId ?? "_chat",

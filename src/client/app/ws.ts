@@ -47,6 +47,12 @@ export function connectWs(): () => void {
         case "session":
           s.upsertSession(msg.session);
           break;
+        case "team":
+          s.setTeam(msg.team);
+          break;
+        case "repositories":
+          s.setRepositories(msg.repositories);
+          break;
         case "chat":
           if (msg.done) {
             s.setChatBusy(msg.agentId, false);

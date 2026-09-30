@@ -45,7 +45,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {

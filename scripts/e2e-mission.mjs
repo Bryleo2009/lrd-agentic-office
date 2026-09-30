@@ -8,7 +8,7 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 
-const [, , url = "http://127.0.0.1:4173/", prompt = "Valida el CI de lrd-front y corrige el problema.", repositoryId = "lrd-front", baseBranch = "release/fase2", engine = "codex"] = process.argv;
+const [, , url = "http://127.0.0.1:4173/", prompt = "Valida el CI de lrd-front y corrige el problema.", repositoryId = "auto", baseBranch = "", engine = "codex", allowMcp = "false"] = process.argv;
 const out = ".validation";
 fs.mkdirSync(out, { recursive: true });
 const exe = process.env.PLAYWRIGHT_CHROMIUM ?? (fs.existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
@@ -23,14 +23,14 @@ await page.waitForTimeout(1500);
 const res = await fetch(new URL("/api/missions", url), {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ prompt, repositoryId, baseBranch, engine }),
+  body: JSON.stringify({ prompt, repositoryId, baseBranch: baseBranch || null, engine, allowMcp: allowMcp === "true" }),
 });
 const mission = await res.json();
 if (!res.ok) {
   console.error("No se pudo crear la misión:", mission);
   process.exit(1);
 }
-console.log(`Misión ${mission.id} → ${mission.branch}`);
+console.log(`Misión ${mission.id} → repo ${mission.repositoryId} (${mission.repoSelection}) · base ${mission.baseBranch || "-"} · rama ${mission.branch} · MCP ${mission.allowMcp}`);
 
 const t0 = Date.now();
 let shots = 0;
