@@ -146,7 +146,7 @@ export abstract class BaseCliExecutor implements AgentExecutor {
     if (code !== 0 && !terminal && produced === 0 && attempt < 2) {
       const fix = await this.recoverFromStartupFailure(inv, stderr, session);
       if (fix) {
-        yield { type: "AGENT_STATUS", title: fix.note, detail: tail(stderr, 1500), status: "warning" };
+        yield { type: "AGENT_STATUS", title: fix.note, detail: tail(stderr, 1500), status: "info" };
         yield* this.runInvocation(session, fix.inv, promptForLog, attempt + 1);
         return;
       }

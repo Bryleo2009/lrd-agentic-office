@@ -7,9 +7,13 @@ if (a[0] === "exec" && has("--help")) { console.log("--json --cd --sandbox --ski
 if (a[0] === "login") { console.log("Logged in using ChatGPT"); process.exit(0); }
 // FAKE_LRD_ONLY_IN: lrd solo existe en el config.toml de esa carpeta (como un config de proyecto).
 const lrdHere = !process.env.FAKE_LRD_ONLY_IN || process.cwd() === process.env.FAKE_LRD_ONLY_IN;
-if (a[0] === "mcp") { console.log(JSON.stringify([...(lrdHere ? [{ name: "lrd", enabled: true, transport: { type: "stdio" } }] : []), { name: "node_repl", enabled: true, transport: { type: "stdio" } }])); process.exit(0); }
+if (a[0] === "mcp") { console.log(JSON.stringify([...(lrdHere ? [{ name: "lrd", enabled: true, transport: { type: "stdio" } }] : []), { name: "node_repl", enabled: true, transport: { type: "stdio" } }, ...(process.env.FAKE_CUA ? [{ name: "cua_repl", enabled: true, transport: { type: "stdio" } }] : [])])); process.exit(0); }
 if (a[0] === "exec") {
-  if (a.includes("mcp_servers.node_repl.enabled=false")) {
+  if (a.includes("mcp_servers.cua_repl.enabled=false")) {
+    process.stderr.write("Error loading config.toml: invalid transport\nin `mcp_servers.cua_repl`\n");
+    process.exit(1);
+  }
+  if (a.includes("mcp_servers.node_repl.enabled=false") && !process.env.FAKE_CUA) {
     process.stderr.write("Error loading config: invalid mcp_servers.node_repl: missing field `command`\n");
     process.exit(1);
   }

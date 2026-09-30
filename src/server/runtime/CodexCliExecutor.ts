@@ -105,6 +105,9 @@ export class CodexCliExecutor extends BaseCliExecutor {
     const plugins = new Set<string>();
     for (const m of this.status?.mcpServers ?? []) {
       if (!m.enabled || allow.has(m.name) || !/^[\w-]+$/.test(m.name)) continue;
+      // Herramientas integradas (cua_repl, browser…) que no están en [mcp_servers]: no son fuentes de
+      // datos y Codex rechaza desactivarlas por override, así que no se intenta (evita un arranque fallido).
+      if (cfg && isToolMcp(m.name) && !cfg.mcpServers.includes(m.name)) continue;
       // Un MCP aportado por un plugin no está en [mcp_servers.<n>]: `mcp_servers.<n>.enabled=false`
       // crearía una entrada sin command/url ("invalid transport"). Se desactiva el plugin completo.
       const plugin = cfg && !cfg.mcpServers.includes(m.name) ? pluginForServer(m.name, cfg) : null;
@@ -148,7 +151,7 @@ export class CodexCliExecutor extends BaseCliExecutor {
     if (!drop.length || drop.some((n) => !isToolMcp(n))) return null;
     return {
       inv: this.withoutOverrides(inv, drop),
-      note: `Codex no aceptó desactivar ${drop.join(", ")} (herramienta integrada); se reintenta sin ese ajuste`,
+      note: `Ajustando el arranque de Codex (${drop.join(", ")} es una herramienta integrada)`,
     };
   }
 

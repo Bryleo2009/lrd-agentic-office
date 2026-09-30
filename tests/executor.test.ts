@@ -60,3 +60,13 @@ test("MCP aportado por un plugin (lrd-connector): se desactiva el plugin, no mcp
   assert.ok(fin, JSON.stringify(evs.map((e) => [e.type, e.title])));
   assert.match(fin!.finalText ?? "", /lrdOff=true/, "lrd debe seguir bloqueado (vía plugin)");
 });
+
+test("herramienta integrada fuera de config.toml (cua_repl): no se intenta desactivar, arranca a la primera", async () => {
+  const fs = await import("node:fs");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
+  fs.writeFileSync(path.join(home, "config.toml"), '[plugins."lrd-connector@personal"]\nenabled = true\n\n[mcp_servers.node_repl]\ncommand = "x"\n');
+  const evs = await runCodex({ FAKE_CUA: "1", FAKE_LRD_PLUGIN: "1", CODEX_HOME: home });
+  assert.ok(evs.some((e) => e.type === "AGENT_FINISHED"), JSON.stringify(evs.map((e) => [e.type, e.title])));
+  assert.ok(!evs.some((e) => e.type === "AGENT_STATUS" && /cua_repl|Ajustando/.test(e.title)), "no debe haber reintento");
+  assert.match(evs.find((e) => e.type === "AGENT_FINISHED")!.finalText ?? "", /lrdOff=true/);
+});
