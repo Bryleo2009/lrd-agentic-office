@@ -223,12 +223,14 @@ export function mcpEnv(name: string): "Producción" | "QA" | null {
 
 export function mcpRules(servers: string[]): string {
   if (!servers.length) return "";
-  const labeled = servers.map((s) => ({ s, env: mcpEnv(s) }));
+  // Si hay una fuente marcada como QA, las que no dicen entorno son las de siempre: Producción.
+  const hasQa = servers.some((s) => mcpEnv(s) === "QA");
+  const labeled = servers.map((s) => ({ s, env: mcpEnv(s) ?? (hasQa && !servers.some((x) => mcpEnv(x) === "Producción") ? ("Producción" as const) : null) }));
   const envs = labeled.some((x) => x.env === "QA") && labeled.some((x) => x.env === "Producción");
   return `
 Tienes acceso a servidores MCP con DATOS REALES (${labeled.map((x) => (x.env ? `${x.s} = ${x.env}` : x.s)).join(", ")}). Reglas obligatorias:
 - Entornos: ${envs ? "hay Producción y QA. Si la misión no dice el entorno, busca primero en Producción y, si no aparece, en QA antes de concluir; di siempre en qué entorno estaba el dato." : "si ves herramientas o backends de Producción y de QA (por su nombre), y la misión no dice el entorno, busca en Producción y luego en QA antes de concluir; di en qué entorno estaba el dato."}
-- Un 404 / "no encontrado" / sin resultados es una respuesta sobre los datos, NO una herramienta rota.
+- Un 404 / "no encontrado" / sin resultados es una respuesta sobre los datos, NO una herramienta rota. Si buscaste por un número incompleto, busca por coincidencia parcial antes de concluir.
 - SOLO LECTURA: únicamente consultas de lectura (SELECT / GET). Nunca INSERT, UPDATE, DELETE, DDL, ni acciones que modifiquen datos o envíen algo.
 - Limita resultados (LIMIT / filtros por fecha) y prefiere agregados.
 - No copies datos personales sensibles (documentos, teléfonos, correos, tarjetas) en tu respuesta; resume.
