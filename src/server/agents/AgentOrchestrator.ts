@@ -472,7 +472,13 @@ export class AgentOrchestrator {
     // Consulta rápida de datos: un solo agente, sin planificación de Atlas ni reunión final.
     if (noRepo && isQuickLookup(mission.prompt)) {
       const who: AgentId = ({ rappi: "rafa", pedidosya: "piero", finance: "fiona" } as Record<string, AgentId>)[mission.area] ?? "nora";
-      const step = this.newStep(id, "s1", who, "Consulta rápida", mission.prompt, [], false, "agent");
+      const task = `${mission.prompt}
+
+Es una consulta puntual: respóndela directo con los datos, en pocas consultas (idealmente 1 a 3).
+- Si hay varias coincidencias, lístalas brevemente (máx. 5, con fecha y canal) y detalla la más reciente o la que mejor encaje; no investigues todas.
+- No revises integraciones externas, código, logs ni permisos salvo que el usuario lo pida explícitamente.
+- Responde en pocas líneas, como se lo dirías a alguien del equipo.`;
+      const step = this.newStep(id, "s1", who, "Consulta rápida", task, [], false, "agent");
       repo.addStep(step, 1);
       this.setMission(id, { status: "running", planSource: "rules" });
       this.emit(id, "atlas", {
