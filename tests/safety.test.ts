@@ -221,3 +221,31 @@ test("biblioteca: guarda sin duplicar, busca sin tildes y trae lo relacionado", 
   assert.equal(lib.libraryCounts().manual, 1);
   assert.equal(lib.deleteDoc(a.id), true);
 });
+
+test("QA: variables del CI por repo, chequeo de la base de pruebas y fallas de entorno", async () => {
+  const net = await import("node:net");
+  const { qaEnvFor, qaPreflight, environmentProblem, failureLine, detectQa } = await import("../src/server/missions/qa");
+  const repo = { id: "b", qaEnv: { APP_ENV: "testing", DB_HOST: "${CI_DB_HOST:-127.0.0.1}", DB_DATABASE: "${CI_DB_DATABASE:-lrd_ci}" } } as never;
+  assert.deepEqual(qaEnvFor(repo, { CI_DB_HOST: "10.0.0.9" }), { APP_ENV: "testing", DB_HOST: "10.0.0.9", DB_DATABASE: "lrd_ci" });
+  assert.equal(await qaPreflight({ DB_CONNECTION: "sqlite" }), null, "sqlite no necesita servidor");
+  const srv = net.createServer().listen(0, "127.0.0.1");
+  await new Promise((r) => srv.once("listening", r));
+  const port = String((srv.address() as { port: number }).port);
+  assert.equal(await qaPreflight({ DB_CONNECTION: "mysql", DB_HOST: "127.0.0.1", DB_PORT: port }), null);
+  srv.close();
+  assert.match((await qaPreflight({ DB_CONNECTION: "mysql", DB_HOST: "127.0.0.1", DB_PORT: port, DB_DATABASE: "lrd_ci" }, 800)) ?? "", /no hay MySQL en 127\.0\.0\.1:\d+ .*lrd_ci/);
+  assert.equal(environmentProblem("scripts/migrate-ci: line 4: APP_ENV: APP_ENV es obligatorio."), "faltan variables de entorno de QA");
+  assert.equal(environmentProblem("SQLSTATE[HY000] [2002] Connection refused"), "no se pudo conectar a la base de datos de pruebas");
+  assert.equal(environmentProblem("FAILED  Tests\\Feature\\OrderTest > crea la orden\nExpected 201, got 500"), null, "una prueba que falla sí es del código");
+  assert.equal(failureLine("Running…\n  INFO  ok\nError: Call to undefined method Orden::embudo()\n   at app/Foo.php:12"), "Error: Call to undefined method Orden::embudo()");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "lrd-qa-"));
+  fs.writeFileSync(path.join(wt, "artisan"), "");
+  fs.writeFileSync(path.join(wt, "composer.json"), '{"require-dev":{"brianium/paratest":"^7"}}');
+  fs.mkdirSync(path.join(wt, "vendor"));
+  const base = { id: "b", qaStages: [["php artisan test"]] } as never;
+  assert.deepEqual(detectQa(wt, base).commands, ["php artisan test --parallel"]);
+  assert.deepEqual(detectQa(wt, { ...(base as object), qaParallelTests: false } as never).commands, ["php artisan test"], "como el CI: en serie");
+});

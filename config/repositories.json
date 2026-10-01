@@ -27,7 +27,22 @@
         [
           "php artisan test"
         ]
-      ]
+      ],
+      "qaEnv": {
+        "APP_ENV": "testing",
+        "APP_KEY": "${APP_KEY_CI:-base64:11Y0OKRkUCxvVnOp0TfX9qp42HbNKeCLqH7QE2iYT7E=}",
+        "DB_CONNECTION": "${CI_DB_CONNECTION:-mysql}",
+        "DB_HOST": "${CI_DB_HOST:-127.0.0.1}",
+        "DB_PORT": "${CI_DB_PORT:-3306}",
+        "DB_DATABASE": "${CI_DB_DATABASE:-lrd_ci}",
+        "DB_USERNAME": "${CI_DB_USERNAME:-lrd_ci}",
+        "DB_PASSWORD": "${CI_DB_PASSWORD:-lrd_ci}",
+        "CACHE_STORE": "array",
+        "QUEUE_CONNECTION": "sync",
+        "SESSION_DRIVER": "array",
+        "MAIL_MAILER": "array"
+      },
+      "qaParallelTests": false
     },
     {
       "id": "lrd-front",

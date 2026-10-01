@@ -28,6 +28,7 @@ const qaLog = path.join(root, "qa.log");
 const slow = (tag: string) => `node -e "const t=Date.now();setTimeout(()=>{require('fs').appendFileSync(process.env.QA_LOG, JSON.stringify({tag:'${tag}',start:t,end:Date.now()})+'\\\\n')},1200)"`;
 const back = makeRepo("lrd-back", { name: "back", scripts: { build: slow("build"), test: slow("test") } });
 const front = makeRepo("lrd-front", { name: "front", scripts: { build: slow("front-build") } });
+const api = makeRepo("lrd-api", { name: "api" });
 fs.writeFileSync(
   path.join(root, "repos.json"),
   JSON.stringify({
@@ -35,6 +36,10 @@ fs.writeFileSync(
       { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2", "release/fase3.1"], defaultBase: "release/fase2",
         qaStages: [["npm run build", "npm test"], [slow("after")]] },
       { id: "lrd-front", name: "lrd-front", github: "x/lrd-front", cloneUrl: front, shortName: "front", kind: "frontend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
+      // QA como el de lrd-back: variables del CI y una base MySQL de pruebas (aquí no hay ninguna escuchando).
+      { id: "lrd-api", name: "lrd-api", github: "x/lrd-api", cloneUrl: api, shortName: "api", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2",
+        qaEnv: { APP_ENV: "testing", DB_CONNECTION: "${QA_TEST_DB:-mysql}", DB_HOST: "127.0.0.1", DB_PORT: "1", DB_DATABASE: "lrd_ci" },
+        qaStages: [[`node -e "process.exit(process.env.APP_ENV ? 0 : (console.error('APP_ENV es obligatorio.'), 1))"`]] },
     ],
     protectedBranches: ["main", "release/fase2"],
   }),
@@ -54,7 +59,7 @@ Object.assign(process.env, {
   QA_LOG: qaLog,
   CODEX_HOME: path.join(root, "codex-home"),
   GH_COMMAND: path.resolve("tests/fixtures/fake-gh.mjs"),
-  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front }),
+  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front, "x/lrd-api": api }),
   CI_POLL_SEC: "1",
   CI_APPEAR_SEC: "2",
 });
@@ -434,4 +439,27 @@ test("biblioteca: la misión deja su resumen, los informes y tu decisión; la si
   // No se consulta a sí misma, y no se duplican documentos al volver a guardar el mismo paso.
   const again = lib.searchLibrary({ q: m.id });
   assert.equal(again.filter((d) => d.title.startsWith(`Misión #${m.id}`)).length, 1);
+});
+
+test("QA sin su entorno (sin MySQL de pruebas): no se culpa al código; se valida con GitHub Actions al publicar", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  // Sin publicar: el QA no se puede correr y la misión lo dice claro, sin mandar a nadie a "corregir".
+  const a = await finished((await orchestrator.createMission({ prompt: "Implementa los totales en la API, no publiques", repositoryId: "lrd-api", engine: "codex" })).id);
+  assert.equal(a.status, "failed");
+  assert.match(a.error ?? "", /QA no se pudo correr \(entorno, no el código\): no hay MySQL en 127\.0\.0\.1:1/);
+  assert.ok(!repo.missionEvents(a.id).some((e) => /Corregir falla de QA/.test(e.title)), "no se le pasó la falla al desarrollador");
+
+  // Publicando: el QA local se omite con aviso y GitHub Actions es quien valida.
+  const b = await finished((await orchestrator.createMission({ prompt: "Implementa los totales en la API", repositoryId: "lrd-api", engine: "codex" })).id);
+  assert.equal(b.status, "done", b.error ?? "");
+  assert.ok(repo.missionEvents(b.id).some((e) => /QA local no disponible: se validará con GitHub Actions/.test(e.title)));
+  assert.equal(b.ci[0]?.state, "success");
+
+  // Con una base que sí "existe" (sqlite), las variables del CI llegan a los comandos de QA y pasan.
+  process.env.QA_TEST_DB = "sqlite";
+  const c = await finished((await orchestrator.createMission({ prompt: "Implementa los totales en la API otra vez", repositoryId: "lrd-api", engine: "codex" })).id);
+  delete process.env.QA_TEST_DB;
+  assert.equal(c.status, "done", c.error ?? "");
+  assert.ok(c.steps.some((s) => s.kind === "qa" && /QA OK/.test(s.result ?? "")), "QA corrió con APP_ENV del CI");
 });

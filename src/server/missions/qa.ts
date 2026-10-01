@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import type { RepositoryConfig } from "../../shared/types";
 import { trackChild } from "../runtime/childRegistry";
@@ -44,7 +45,7 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
     setup.push("composer install --no-interaction --prefer-dist");
   }
   // "php artisan test" configurado a mano también aprovecha ParaTest si está instalado.
-  const par = (c: string) => (c.trim() === "php artisan test" && hasParatest(wt) ? "php artisan test --parallel" : c);
+  const par = (c: string) => (c.trim() === "php artisan test" && repo.qaParallelTests !== false && hasParatest(wt) ? "php artisan test --parallel" : c);
   const stages = repo.qaStages?.map((s) => s.filter(Boolean).map(par)).filter((s) => s.length);
   if (stages?.length) return { setup, commands: stages.flat(), stages, note: null };
   if (repo.qaCommands?.length) return { setup, commands: repo.qaCommands, stages: [repo.qaCommands], note: null };
@@ -60,9 +61,66 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
     }
   }
   // Con ParaTest instalado, Laravel reparte las pruebas en varios procesos (cada uno con su propia BD de prueba).
-  if (fs.existsSync(path.join(wt, "artisan"))) commands.push(hasParatest(wt) ? "php artisan test --parallel" : "php artisan test");
+  if (fs.existsSync(path.join(wt, "artisan"))) commands.push(repo.qaParallelTests !== false && hasParatest(wt) ? "php artisan test --parallel" : "php artisan test");
   else if (fs.existsSync(path.join(wt, "vendor", "bin", "phpunit")) || fs.existsSync(path.join(wt, "phpunit.xml"))) commands.push("vendor/bin/phpunit");
   return { setup, commands, stages: commands.length ? [commands] : [], note: commands.length ? null : "No se detectaron comandos de build/test en el repositorio" };
+}
+
+/** Variables de QA del repo con `${VAR:-por defecto}` resuelto desde el entorno de la oficina. */
+export function qaEnvFor(repo: RepositoryConfig, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(repo.qaEnv ?? {}))
+    out[k] = String(v).replace(/\$\{(\w+)(?::-([^}]*))?\}/g, (_, name: string, def?: string) => env[name] || def || "");
+  return out;
+}
+
+/**
+ * Antes de correr QA: si el repo prueba contra una base de datos de red (MySQL/Postgres), comprueba que
+ * responda. Devuelve el problema (en palabras) o null si se puede correr.
+ */
+export async function qaPreflight(env: Record<string, string>, timeoutMs = 3000): Promise<string | null> {
+  const driver = (env.DB_CONNECTION ?? "").toLowerCase();
+  if (!["mysql", "mariadb", "pgsql"].includes(driver)) return null;
+  const host = env.DB_HOST || "127.0.0.1";
+  const port = Number(env.DB_PORT || (driver === "pgsql" ? 5432 : 3306));
+  const ok = await new Promise<boolean>((resolve) => {
+    const s = net.connect({ host, port });
+    const done = (v: boolean) => {
+      s.destroy();
+      resolve(v);
+    };
+    s.setTimeout(timeoutMs, () => done(false));
+    s.once("connect", () => done(true));
+    s.once("error", () => done(false));
+  });
+  return ok
+    ? null
+    : `no hay ${driver === "pgsql" ? "PostgreSQL" : "MySQL"} en ${host}:${port} para las pruebas (base ${env.DB_DATABASE || "?"}, usuario ${env.DB_USERNAME || "?"}), como el que usa el CI`;
+}
+
+/**
+ * ¿La falla es del ENTORNO de QA (base de datos, .env, dependencias) y no del código? Esas no se le pasan al
+ * desarrollador para "corregir": no es su código, y tocaría archivos que no corresponden.
+ */
+export function environmentProblem(output: string): string | null {
+  const checks: [RegExp, string][] = [
+    [/(\w+) es obligatorio|parameter null or not set|: (\w+): unbound variable/i, "faltan variables de entorno de QA"],
+    [/SQLSTATE\[HY000\] \[(2002|2003|1045|1049)\]|Connection refused|could not connect to server|Can't connect to MySQL/i, "no se pudo conectar a la base de datos de pruebas"],
+    [/could not find driver/i, "falta la extensión de PHP para la base de datos (pdo_mysql/pdo_pgsql)"],
+    [/vendor[\\/]autoload\.php|Failed opening required/i, "faltan las dependencias (vendor/)"],
+    [/No application encryption key has been specified|MissingAppKeyException/i, "falta APP_KEY"],
+    [/database file at path .* does not exist|Database .* does not exist/i, "no existe la base de datos de pruebas"],
+  ];
+  for (const [re, why] of checks) if (re.test(output)) return why;
+  return null;
+}
+
+/** La línea que mejor explica por qué falló un comando (para el resumen). */
+export function failureLine(output: string): string {
+  const lines = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const hit = [...lines].reverse().find((l) => /error|exception|failed|fail|obligatorio|SQLSTATE|denied|not found|no existe|✗|⨯/i.test(l) && !/^at |^#\d/.test(l));
+  const l = hit ?? lines.at(-1) ?? "";
+  return l.length > 160 ? `${l.slice(0, 159)}…` : l;
 }
 
 export interface CommandResult {
@@ -94,7 +152,7 @@ export function runShell(
   command: string,
   cwd: string,
   onOutput: (chunk: string) => void,
-  opts: { timeoutMs?: number; signal?: { cancelled: boolean; kill?: () => void } } = {},
+  opts: { timeoutMs?: number; signal?: { cancelled: boolean; kill?: () => void }; env?: Record<string, string> } = {},
 ): Promise<CommandResult> {
   const t0 = Date.now();
   return new Promise((resolve) => {
@@ -102,7 +160,7 @@ export function runShell(
     const child = spawn(resolveShellCommand(command), {
       cwd,
       shell: true,
-      env: childEnv({ CI: "true" }),
+      env: childEnv({ CI: "true", ...(opts.env ?? {}) }),
       windowsHide: true,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],

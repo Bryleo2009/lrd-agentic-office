@@ -198,6 +198,14 @@ Puedes fijar `qaCommands` (p. ej. `["npm run build"]`) o dejar que se autodetect
   · `php artisan optimize:clear` → etapa 2 `bash scripts/migrate-ci` → etapa 3 `php artisan test` (con `--parallel` si hay ParaTest).
 - **lrd-front** (`npm run check-frontend`): en paralelo `npm run lint:check` · `npm run type-check` · `npm run test` · `npm run build`.
 
+**Entorno de QA (`qaEnv`)**: el QA corre con las mismas variables que el CI del repo. En `lrd-back`: `APP_ENV=testing`,
+`APP_KEY` de pruebas, MySQL `lrd_ci` en `127.0.0.1:3306` (usuario/clave `lrd_ci`), `CACHE_STORE=array`, etc., y las
+pruebas en serie (`qaParallelTests: false`), igual que GitHub Actions. Si tu base de pruebas está en otro lado, ponlo en
+el `.env` de la oficina (`CI_DB_HOST`, `CI_DB_PORT`, `CI_DB_DATABASE`, `CI_DB_USERNAME`, `CI_DB_PASSWORD`). Antes de
+correr, la oficina comprueba que la base responda. Si falta el entorno (sin base, sin variables, sin `vendor/`), **no
+se culpa al código ni se manda a "corregir"**: si la rama se va a publicar, el QA local se omite con aviso y la valida
+GitHub Actions; si no, el paso falla explicando qué falta.
+
 En Windows, `bash scripts/...` usa el bash de Git for Windows (`C:\Program Files\Git\bin\bash.exe`, o la ruta en `GIT_BASH`).
 
 ## Seguridad

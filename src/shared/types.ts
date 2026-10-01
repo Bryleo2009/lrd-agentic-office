@@ -240,6 +240,13 @@ export interface RepositoryConfig {
   qaStages?: string[][];
   /** Comando único de verificación del repo que los agentes pueden correr tras sus cambios (p. ej. "npm run check-frontend"). */
   checkCommand?: string;
+  /**
+   * Variables de entorno de QA (las mismas del CI). Acepta `${VAR:-por defecto}`, para poder cambiarlas
+   * desde tu .env sin tocar el archivo (p. ej. CI_DB_HOST).
+   */
+  qaEnv?: Record<string, string>;
+  /** `php artisan test` en paralelo con ParaTest (por defecto sí). Con MySQL compartido conviene false, como en el CI. */
+  qaParallelTests?: boolean;
   installCommand?: string | null;
   kind?: "frontend" | "backend" | "other";
   /** Palabras que ayudan a elegir este repo en modo Automático. */

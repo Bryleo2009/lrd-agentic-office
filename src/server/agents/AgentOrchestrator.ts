@@ -17,9 +17,9 @@ import { libraryPrompt, relatedDocs, saveDoc, type NewDoc } from "../library";
 import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
-import { detectQa, runShell } from "../missions/qa";
+import { detectQa, environmentProblem, failureLine, qaEnvFor, qaPreflight, runShell } from "../missions/qa";
 import type { ExecutorEvent, PermissionProfile } from "../runtime/AgentExecutor";
-import { firstLine } from "../runtime/parsers/common";
+import { classifyCommand, firstLine } from "../runtime/parsers/common";
 import { commandExitReason, explainGitError, saturationFrom } from "../runtime/humanize";
 import { tail as tailText } from "../runtime/processUtils";
 import { runtime } from "../runtime/RuntimeDetector";
@@ -1525,6 +1525,11 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
       return;
     }
 
+    // Mismas variables que el CI del repo (APP_ENV, DB_*…) y, si prueba contra MySQL, que la base responda.
+    const env = qaEnvFor(r);
+    const pre = await qaPreflight(env);
+    if (pre) return this.qaUnavailable(id, step, r, tag, pre);
+
     let attempt = 0;
     for (;;) {
       const qa = detectQa(wt, r);
@@ -1534,7 +1539,7 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
         return;
       }
       for (const cmd of qa.setup) {
-        const res = await this.qaCommand(id, wt, cmd, rt, false);
+        const res = await this.qaCommand(id, wt, cmd, rt, false, undefined, env);
         if (rt.cancelled) return;
         if (res.exitCode !== 0) {
           this.setStep(id, step, { status: "failed", error: `Falló la instalación (${cmd}): ${res.summary}`, finishedAt: new Date().toISOString() });
@@ -1557,7 +1562,7 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
       const results = [];
       for (const stage of qa.stages) {
         const lanes = Math.max(1, Math.min(config.qaParallel, stage.length));
-        results.push(...(await mapLimit(stage, lanes, (cmd, i) => this.qaCommand(id, wt, cmd, rt, true, lanes > 1 ? (i % lanes) + 1 : undefined))));
+        results.push(...(await mapLimit(stage, lanes, (cmd, i) => this.qaCommand(id, wt, cmd, rt, true, lanes > 1 ? (i % lanes) + 1 : undefined, env))));
         if (rt.cancelled) return;
       }
       const failures = results.filter((res) => res.exitCode !== 0).map((res) => ({ cmd: res.command, out: res.output.slice(-8000) }));
@@ -1566,7 +1571,10 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
         this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_FINISHED", title: `Build y pruebas en verde${tag}`, status: "success", metadata: { stepId: step.id } });
         return;
       }
-      const failedCmds = failures.map((f) => f.cmd).join(", ");
+      // Falla del entorno (base de datos, variables, dependencias): no es del código, no se le pasa al desarrollador.
+      const envIssue = failures.map((f) => environmentProblem(f.out)).find(Boolean);
+      if (envIssue) return this.qaUnavailable(id, step, r, tag, `${envIssue} — ${failures.map((f) => `${f.cmd}: ${failureLine(f.out)}`).join(" · ")}`);
+      const failedCmds = failures.map((f) => `${f.cmd} → ${failureLine(f.out)}`).join(" · ");
       const writer = rt.lastWriter.get(r.id);
       if (attempt >= config.qaFixIterations || !writer) {
         this.setStep(id, step, { status: "failed", error: `QA falló${tag}: ${failedCmds}`, finishedAt: new Date().toISOString() });
@@ -1603,7 +1611,27 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
     }
   }
 
-  private async qaCommand(id: string, wt: string, cmd: string, rt: MissionRuntime, isTest: boolean, lane?: number) {
+  /**
+   * El QA local no se puede correr en esta PC (falta la base de datos de pruebas, variables, dependencias…).
+   * No es culpa del código: si la rama se va a publicar, la valida GitHub Actions (que tiene ese entorno);
+   * si no, el paso falla explicando qué falta.
+   */
+  private qaUnavailable(id: string, step: MissionStep, r: RepositoryConfig, tag: string, reason: string): void {
+    const m = repo.getMission(id)!;
+    const ciCovers = config.ciWaitEnabled && config.githubPushEnabled && deliveryPrefs(m.prompt).publish;
+    const how = r.qaEnv?.DB_CONNECTION
+      ? `Para correrlo en esta PC, levanta la base de pruebas como en el CI (p. ej. MySQL con base y usuario lrd_ci) o apunta a otra con CI_DB_HOST, CI_DB_PORT, CI_DB_DATABASE, CI_DB_USERNAME y CI_DB_PASSWORD en el .env de la oficina.`
+      : "Revisa el entorno de QA de este repositorio en config/repositories.json (qaEnv).";
+    if (ciCovers) {
+      this.setStep(id, step, { status: "done", result: `QA local no disponible: ${reason}. Se valida con GitHub Actions al publicar.`, finishedAt: new Date().toISOString() });
+      this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_STATUS", title: `QA local no disponible${tag}: se validará con GitHub Actions`, detail: `${reason}\n\n${how}`, status: "warning", metadata: { qaSkipped: true } });
+      return;
+    }
+    this.setStep(id, step, { status: "failed", error: `QA no se pudo correr${tag} (entorno, no el código): ${reason}`, finishedAt: new Date().toISOString() });
+    this.emit(id, "vega", { provider: "qa", sessionId: null, type: "AGENT_BLOCKED", title: `QA no se pudo correr${tag}: ${firstLine(reason, 90)}`, detail: `${reason}\n\n${how}`, status: "error" });
+  }
+
+  private async qaCommand(id: string, wt: string, cmd: string, rt: MissionRuntime, isTest: boolean, lane?: number, env?: Record<string, string>) {
     const label = lane ? `Carril ${lane} · ` : "";
     this.emit(id, "vega", { provider: "qa", sessionId: null, type: isTest ? "TEST_STARTED" : "COMMAND_STARTED", title: `${label}$ ${cmd}`, command: cmd, status: "running", metadata: { lane: lane ?? null } });
     let buf = "";
@@ -1621,14 +1649,20 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
           this.emit(id, "vega", { provider: "qa", sessionId: null, type: isTest ? "TEST_OUTPUT" : "COMMAND_OUTPUT", title: firstLine(lastLine, 120) || "…", command: cmd, detail: buf.slice(-6000), status: "running", metadata: { lane: lane ?? null } });
         }
       },
-      { signal, timeoutMs: 30 * 60_000 },
+      { signal, timeoutMs: 30 * 60_000, env },
     ).finally(() => rt.qaSignals.delete(signal));
     const ok = res.exitCode === 0;
     this.emit(id, "vega", {
       provider: "qa",
       sessionId: null,
       type: isTest ? "TEST_FINISHED" : "COMMAND_FINISHED",
-      title: label + (ok ? (isTest ? `${cmd} ✓` : `${cmd} listo`) : res.exitCode === 1 && isTest ? `${cmd}: algunas pruebas fallaron` : `${cmd} falló: ${commandExitReason(res.exitCode)}`),
+      title:
+        label +
+        (ok
+          ? isTest ? `${cmd} ✓` : `${cmd} listo`
+          : res.exitCode === 1 && classifyCommand(cmd).kind === "test"
+            ? `${cmd}: algunas pruebas fallaron`
+            : `${cmd} falló: ${firstLine(failureLine(res.output), 100) || commandExitReason(res.exitCode)}`),
       command: cmd,
       detail: `${res.summary}\n\n${res.output.slice(-12000)}`,
       status: ok ? "success" : "error",
