@@ -40,7 +40,7 @@ export function checklistPrompt(items: ChecklistItem[], mode: "implement" | "ver
   if (!items.length) return "";
   const list = items.map((i) => `${i.id}. ${i.text}${i.status === "done" ? " (ya marcado)" : i.status === "failed" ? ` (PENDIENTE: ${i.note ?? ""})` : ""}`).join("\n");
   return mode === "implement"
-    ? `\n\nChecklist de la misión (criterios de aceptación):\n${list}\nAl final, por cada punto que TÚ dejaste resuelto escribe una línea "HECHO: <número>" (puedes agrupar: "HECHO: 1, 3, 4"). Si alguno no aplica a tu tarea, "NO_APLICA: <número> — motivo". No marques lo que no hiciste.\n`
+    ? `\n\nChecklist de la misión (criterios de aceptación):\n${list}\nAl final, por cada punto que TÚ dejaste resuelto escribe una línea "HECHO: <número>" (puedes agrupar: "HECHO: 1, 3, 4"). No marques lo que no hiciste ni los puntos de otros compañeros (los verifica la revisión).\n`
     : `\n\nChecklist de la misión (criterios de aceptación):\n${list}\nVerifica cada punto contra el código/resultado real y escribe por cada uno "VERIFICADO: <número>" o "PENDIENTE: <número> — qué falta". No marques VERIFICADO sin evidencia.\n`;
 }
 
@@ -62,6 +62,8 @@ export function applyChecklistMarks(items: ChecklistItem[], text: string, agentI
         if (!it) continue;
         // Un "HECHO" del implementador no pisa un "PENDIENTE" de la revisión (salvo que la revisión lo verifique).
         if (kind === "HECHO" && it.status === "failed") continue;
+        // "No aplica" solo lo decide la revisión (Atlas): que un punto no sea de MI tarea no lo da por cumplido.
+        if (kind === "NO_APLICA" && agentId !== "atlas") continue;
         it.status = kind === "PENDIENTE" ? "failed" : kind === "NO_APLICA" ? "skipped" : "done";
         it.how = kind === "HECHO" ? "hecho" : kind === "VERIFICADO" ? "verificado" : kind === "PENDIENTE" ? "pendiente" : "no aplica";
         it.by = agentId;

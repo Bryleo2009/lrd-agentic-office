@@ -95,6 +95,16 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
 5. Puedes cambiarlo desde el texto de la misión: "no publiques" / "solo local" deja la rama sin push; "directo en la rama base" / "sin crear rama" hace commit sobre la base (solo si no está protegida). Para desactivar el push globalmente: `GITHUB_PUSH_ENABLED=false`. El PR sigue siendo opcional (`GITHUB_PR_ENABLED=true`).
 6. Haz clic en un personaje para ver su drawer: **Actividad**, **Chat** (va a su sesión real de Codex/Claude), **Terminal** (comandos reales, exit code, *Ver output completo*) y **Perfil**.
 
+### Monorepos y revisión en tu repo
+
+- **Monorepo** (p. ej. `chatbot-contigo` con `aplicaciones/api` y el admin): si configuras cada parte como un repositorio
+  cuya ruta local apunta a su subcarpeta, la oficina detecta que son el mismo repositorio git y usa **una sola carpeta
+  de trabajo y una sola rama** para todas las partes; cada agente trabaja y prueba en su subcarpeta, y se hace un solo
+  commit.
+- **"Deja mi repo en la rama para revisión"** (Atlas lo entiende de la misión, o pídeselo a un agente por chat): al
+  terminar, tu repo local queda en la rama de la misión. Solo si tu repo no tiene cambios sin guardar; nunca se pisa
+  tu trabajo. Requiere la ruta de tu repo en *Ajustes → Repositorios en esta PC*.
+
 ### Repositorio y rama opcionales
 
 En *Nueva misión* el repositorio y la rama pueden quedar en **Automático**: se elige el repo por el texto de la misión

@@ -19,6 +19,9 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   delete env.SENTRY_AUTH_TOKEN;
   delete env.SENTRY_ORG;
   delete env.SENTRY_PROJECT;
+  // El modo de la oficina (npm start = production) no debe colarse en agentes ni QA: npm omitiría las
+  // devDependencies (vitest, vite…) y las pruebas y el build fallarían.
+  delete env.NODE_ENV;
   // Evita que un Claude Code anidado herede la sesión del proceso padre.
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_SESSION_ID;

@@ -29,6 +29,23 @@ const slow = (tag: string) => `node -e "const t=Date.now();setTimeout(()=>{requi
 const back = makeRepo("lrd-back", { name: "back", scripts: { build: slow("build"), test: slow("test") } });
 const front = makeRepo("lrd-front", { name: "front", scripts: { build: slow("front-build") } });
 const api = makeRepo("lrd-api", { name: "api" });
+// Monorepo (como chatbot-contigo): back en api/ y front en admin/, el MISMO repositorio git.
+function makeMono(): string {
+  const bare = path.join(root, "mono.git");
+  git(["init", "-q", "--bare", bare], root);
+  const seed = path.join(root, "mono-seed");
+  git(["clone", "-q", bare, seed], root);
+  for (const d of ["api", "admin"]) {
+    fs.mkdirSync(path.join(seed, d, "node_modules"), { recursive: true });
+    fs.writeFileSync(path.join(seed, d, "package.json"), JSON.stringify({ name: d, scripts: { build: "node -e 0" } }));
+  }
+  fs.writeFileSync(path.join(seed, ".gitignore"), "node_modules\n");
+  git(["add", "-A"], seed);
+  git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], seed);
+  git(["push", "-q", "origin", "HEAD:refs/heads/release/fase2"], seed);
+  return bare;
+}
+const mono = makeMono();
 fs.writeFileSync(
   path.join(root, "repos.json"),
   JSON.stringify({
@@ -36,6 +53,8 @@ fs.writeFileSync(
       { id: "lrd-back", name: "lrd-back", github: "x/lrd-back", cloneUrl: back, shortName: "back", kind: "backend", enabled: true, allowedBases: ["release/fase2", "release/fase3.1"], defaultBase: "release/fase2",
         qaStages: [["npm run build", "npm test"], [slow("after")]] },
       { id: "lrd-front", name: "lrd-front", github: "x/lrd-front", cloneUrl: front, shortName: "front", kind: "frontend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
+      { id: "mono-api", name: "mono/api", github: "x/mono", cloneUrl: mono, shortName: "monoapi", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
+      { id: "mono-admin", name: "mono/admin", github: "x/mono", cloneUrl: mono, shortName: "monoadmin", kind: "frontend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2" },
       // QA como el de lrd-back: variables del CI y una base MySQL de pruebas (aquí no hay ninguna escuchando).
       { id: "lrd-api", name: "lrd-api", github: "x/lrd-api", cloneUrl: api, shortName: "api", kind: "backend", enabled: true, allowedBases: ["release/fase2"], defaultBase: "release/fase2",
         qaEnv: { APP_ENV: "testing", DB_CONNECTION: "${QA_TEST_DB:-mysql}", DB_HOST: "127.0.0.1", DB_PORT: "1", DB_DATABASE: "lrd_ci" },
@@ -59,7 +78,7 @@ Object.assign(process.env, {
   QA_LOG: qaLog,
   CODEX_HOME: path.join(root, "codex-home"),
   GH_COMMAND: path.resolve("tests/fixtures/fake-gh.mjs"),
-  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front, "x/lrd-api": api }),
+  FAKE_GH_REPOS: JSON.stringify({ "x/lrd-back": back, "x/lrd-front": front, "x/lrd-api": api, "x/mono": mono }),
   CI_POLL_SEC: "1",
   CI_APPEAR_SEC: "2",
 });
@@ -549,4 +568,27 @@ test("tokens y modelo por rol: cada paso registra su consumo; planificar y revis
   const follow = calls.find((c) => c.followUp);
   const first = calls.find((c) => c.kind === "question");
   assert.ok(follow && first && follow.chars < first.chars / 2, `respuesta corta: ${follow?.chars} vs ${first?.chars}`);
+});
+
+test("monorepo: back y front del mismo repositorio comparten UNA carpeta y UNA rama; al final tu repo queda en esa rama", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const settings = await import("../src/server/settings");
+  // Tu clon local del monorepo, con la ruta de cada parte apuntando a su subcarpeta (como en Ajustes).
+  const local = path.join(root, "mono-local");
+  git(["clone", "-q", "--branch", "release/fase2", mono, local], root);
+  await settings.setRepoPath("mono-api", path.join(local, "api"));
+  await settings.setRepoPath("mono-admin", path.join(local, "admin"));
+  const m = await finished(
+    (await orchestrator.createMission({ prompt: "Implementa los totales en la API y la pantalla del admin. Al finalizar no publiques; deja mi repositorio en la rama para una revisión humana", repositoryId: "mono-api+mono-admin", engine: "codex" })).id,
+  );
+  assert.equal(m.status, "done", m.error ?? "");
+  const [a, b] = m.repos;
+  assert.ok(a.branch && a.branch === b.branch, `una sola rama: ${a.branch} / ${b.branch}`);
+  assert.equal(a.commitSha, b.commitSha, "un solo commit");
+  assert.ok(a.worktree!.endsWith(path.join("api")) && b.worktree!.endsWith(path.join("admin")), "cada parte en su subcarpeta del mismo worktree");
+  assert.equal(path.dirname(a.worktree!), path.dirname(b.worktree!));
+  const files = git(["show", "--name-only", "--format=", a.commitSha!], local).split("\n");
+  assert.ok(files.includes("api/cambio-back.txt") && files.includes("admin/cambio-front.txt"), files.join(", "));
+  assert.equal(m.pushed, false, "no se publicó");
+  assert.equal(git(["rev-parse", "--abbrev-ref", "HEAD"], local), a.branch, "tu repo quedó en la rama para revisión");
 });

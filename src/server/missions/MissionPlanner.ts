@@ -15,7 +15,7 @@ export interface PlannedStep {
 export interface MissionPlan {
   deliverable: "code_change" | "analysis";
   /** Cómo entregar, según lo que Atlas entendió de la misión completa (no por palabras sueltas). */
-  delivery?: { publish: boolean; directToBase: boolean };
+  delivery?: { publish: boolean; directToBase: boolean; reviewLocal?: boolean };
   /** Criterios de aceptación verificables extraídos de la misión. */
   checklist?: string[];
   steps: PlannedStep[];
@@ -192,6 +192,8 @@ function wantsDirectToBase(p: string): boolean {
     let m: RegExpExecArray | null;
     while ((m = g.exec(p))) {
       const before = p.slice(Math.max(0, m.index - 30), m.index);
+      // "cambiar el repositorio a dicha rama" habla de tu checkout local (revisión), no de dónde entregar.
+      if (/repo\w*\s*$/.test(before)) continue;
       if (!/(\bno\b|\bnunca\b|\bni\b|\bnot\b|\bnever\b|don'?t)[^.\n]{0,25}$/.test(before)) return true;
     }
   }
@@ -203,11 +205,13 @@ function wantsDirectToBase(p: string): boolean {
  * - "no publiques", "solo local", "sin push" → la rama queda solo local.
  * - "directo en la rama base", "sin crear rama" → commit sobre la base (si no está protegida).
  */
-export function deliveryPrefs(prompt: string): { publish: boolean; directToBase: boolean } {
+export function deliveryPrefs(prompt: string): { publish: boolean; directToBase: boolean; reviewLocal: boolean } {
   const p = norm(prompt);
-  const publish = !/no (la )?publiques|sin publicar|no (hagas )?push|sin push|no (la )?subas|solo local/.test(p);
+  const publish = !/no (la )?publiques|sin publicar|no (hagas )?push|sin push|no (la )?subas|solo local|no publicarl/.test(p);
   const directToBase = wantsDirectToBase(p);
-  return { publish, directToBase };
+  // Respaldo (si Atlas no devolvió plan): "cambia el repositorio a esa rama", "revisión humana"…
+  const reviewLocal = /revision humana|(cambia\w*|deja\w*|pon\w*|pasa\w*) (el |mi )?repo\w* (a|en) (la |esa |dicha )?rama/.test(p);
+  return { publish, directToBase, reviewLocal };
 }
 
 export function isAnalysisOnly(prompt: string): boolean {
@@ -294,11 +298,11 @@ Reglas del plan:
 - Si la misión pide corregir/arreglar/implementar, al menos un paso debe tener "writes": true (y "deliverable": "code_change").
 - Pasos independientes no deben depender entre sí (se ejecutan en paralelo).
 - "task" debe ser una instrucción concreta y autocontenida para ese agente.
-- "delivery": cómo quiere el usuario recibir los cambios, según lo que pide en TODO el texto (no por una palabra suelta): "publish" = false solo si pide no publicar / dejarlo local; "directToBase" = true solo si pide trabajar sobre la misma rama (la rama base o la que nombra) sin crear una rama nueva.
+- "delivery": cómo quiere el usuario recibir los cambios, según lo que pide en TODO el texto (no por una palabra suelta): "publish" = false solo si pide no publicar / dejarlo local; "directToBase" = true solo si pide trabajar sobre la misma rama (la rama base o la que nombra) sin crear una rama nueva; "reviewLocal" = true si pide que al terminar SU repositorio local quede en la rama de la misión (para revisarla él/ella).
 - "checklist": los criterios de aceptación VERIFICABLES que pide la misión (archivos a tocar o no tocar, reglas, pruebas pedidas, entregables), cada uno en una frase corta; máximo 12. Si la misión no pide nada concreto, déjalo vacío.
 
 Responde ÚNICAMENTE con un bloque JSON válido, sin texto adicional, con esta forma:
-{"deliverable":"code_change"|"analysis","delivery":{"publish":true,"directToBase":false},"checklist":["…"],"steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
+{"deliverable":"code_change"|"analysis","delivery":{"publish":true,"directToBase":false,"reviewLocal":false},"checklist":["…"],"steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
 }
 
 /** Repo por defecto de un agente en misiones de varios repos: Mica → frontend, el resto → backend. */
@@ -354,7 +358,7 @@ function validate(j: any, prompt: string, repos: RepositoryConfig[] = []): Missi
   for (const s of steps) s.dependsOn = s.dependsOn.filter((d) => ids.has(d) && d !== s.id);
   if (hasCycle(steps)) return null;
   const checklist = Array.isArray(j.checklist) ? j.checklist.map((x: unknown) => String(x)).filter((x: string) => x.trim().length > 3).slice(0, 12) : undefined;
-  const d = j.delivery && typeof j.delivery === "object" ? { publish: j.delivery.publish !== false, directToBase: j.delivery.directToBase === true } : undefined;
+  const d = j.delivery && typeof j.delivery === "object" ? { publish: j.delivery.publish !== false, directToBase: j.delivery.directToBase === true, reviewLocal: j.delivery.reviewLocal === true } : undefined;
   return { deliverable: analysis ? "analysis" : "code_change", steps, source: "ai", ...(checklist?.length ? { checklist } : {}), ...(d ? { delivery: d } : {}) };
 }
 

@@ -89,11 +89,22 @@ export class GitWorktreeManager {
   }
 
   /**
+   * Dónde vive el repo: raíz real de git y subcarpeta (si tu ruta local apunta dentro de un monorepo,
+   * p. ej. chatbot-contigo/aplicaciones/api → raíz chatbot-contigo, subcarpeta aplicaciones/api/).
+   */
+  async layout(repo: RepositoryConfig): Promise<{ top: string; prefix: string }> {
+    const p = this.repoPath(repo);
+    const top = await git(["rev-parse", "--show-toplevel"], p).catch(() => p);
+    const prefix = await git(["rev-parse", "--show-prefix"], p).catch(() => "");
+    return { top: path.resolve(top), prefix: prefix.replace(/[\\/]+$/, "") };
+  }
+
+  /**
    * Worktree aislado en HEAD separado (detached) sobre origin/<base>: no crea ninguna rama.
    * La rama solo se crea si los agentes realmente modifican archivos (ver createBranch).
    */
-  async createWorktree(repo: RepositoryConfig, missionId: string, base: string): Promise<string> {
-    const wt = path.join(paths.worktrees, missionId, repo.shortName);
+  async createWorktree(repo: RepositoryConfig, missionId: string, base: string, dirName = repo.shortName): Promise<string> {
+    const wt = path.join(paths.worktrees, missionId, dirName);
     // Misión retomada tras un reinicio: se reutiliza el worktree con el trabajo que ya tenía.
     if (fs.existsSync(wt)) {
       const ok = await git(["rev-parse", "--is-inside-work-tree"], wt).then(
@@ -142,18 +153,19 @@ export class GitWorktreeManager {
   }
 
   async diffStat(wt: string): Promise<{ stat: string; files: string[]; patch: string }> {
+    // "-- ." limita a la carpeta: en un monorepo, cada parte ve solo sus cambios (en la raíz, todo).
     await git(["add", "-A", "--intent-to-add", "."], wt).catch(() => undefined);
-    const stat = await git(["diff", "--stat"], wt);
-    const names = await git(["diff", "--name-only"], wt);
-    const patch = await git(["diff"], wt);
+    const stat = await git(["diff", "--stat", "--", "."], wt);
+    const names = await git(["diff", "--name-only", "--relative", "--", "."], wt);
+    const patch = await git(["diff", "--", "."], wt);
     return { stat, files: names.split(/\r?\n/).filter(Boolean), patch };
   }
 
   /** Todo lo que se publicaría respecto a origin/<base>: commits de la misión + cambios sin commit. */
   async diffFromBase(wt: string, base: string): Promise<{ files: string[]; patch: string }> {
     await git(["add", "-A", "--intent-to-add", "."], wt).catch(() => undefined);
-    const names = await git(["diff", "--name-only", `origin/${base}`], wt).catch(() => "");
-    const patch = await git(["diff", `origin/${base}`], wt).catch(() => "");
+    const names = await git(["diff", "--name-only", "--relative", `origin/${base}`, "--", "."], wt).catch(() => "");
+    const patch = await git(["diff", `origin/${base}`, "--", "."], wt).catch(() => "");
     return { files: names.split(/\r?\n/).filter(Boolean), patch };
   }
 
@@ -195,6 +207,21 @@ export class GitWorktreeManager {
       await git(pushArgs, wt, 5 * 60_000);
     }
     return branch;
+  }
+
+  /**
+   * Deja TU repo local en la rama de la misión para revisarla. Solo si tu repo no tiene cambios sin guardar
+   * (nunca se pisa trabajo tuyo). El worktree de la misión suelta la rama (queda en HEAD separado) porque git no
+   * permite la misma rama en dos carpetas. Devuelve null si se hizo, o el motivo por el que no.
+   */
+  async checkoutForReview(repo: RepositoryConfig, wt: string, branch: string): Promise<string | null> {
+    if (!this.isUserRepo(repo)) return "la oficina trabaja con su propio clon de este repo: configura la ruta de tu repo en Ajustes → Repositorios en esta PC";
+    const mine = this.repoPath(repo);
+    const dirty = await git(["status", "--porcelain", "--untracked-files=no"], mine).catch(() => "?");
+    if (dirty.trim()) return `tu repo (${mine}) tiene cambios sin guardar; no cambié de rama para no tocarlos`;
+    if ((await this.currentBranch(wt).catch(() => "")) === branch) await git(["switch", "--detach"], wt);
+    await git(["switch", branch], mine);
+    return null;
   }
 
   /** ¿Existe la rama en GitHub? (consulta real al remoto; las referencias locales pueden estar viejas) */

@@ -1,5 +1,6 @@
 import { customAlphabet } from "nanoid";
 import type { AgentRuntimeEvent } from "../../shared/events";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type EngineRole, type TokenUsage, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionQuestion, type MissionRepo, type MissionStatus, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
@@ -69,7 +70,10 @@ export interface CreateMissionInput {
 interface WorkRepo {
   cfg: RepositoryConfig;
   base: string;
+  /** Carpeta de trabajo de este repo (en un monorepo, su subcarpeta dentro del worktree compartido). */
   wt: string;
+  /** Raíz del worktree. Igual a `wt` salvo en monorepos, donde varias partes comparten una raíz (y una rama). */
+  root?: string;
 }
 
 interface MissionRuntime {
@@ -138,8 +142,25 @@ export class AgentOrchestrator {
   }
 
   /** Cómo entregar: lo que entendió Atlas al planificar; si no hay plan de Atlas, la lectura por reglas del texto. */
-  private prefsFor(m: Mission): { publish: boolean; directToBase: boolean } {
+  private prefsFor(m: Mission): { publish: boolean; directToBase: boolean; reviewLocal?: boolean } {
     return m.delivery ?? deliveryPrefs(m.prompt);
+  }
+
+  /** Deja tu repo local en la rama de cada entrega para revisión humana (sin tocar tus cambios sin guardar). */
+  private async reviewLocally(id: string, rt: MissionRuntime, results: MissionRepo[], agentId: AgentId = "atlas"): Promise<string[]> {
+    const lines: string[] = [];
+    const done = new Set<string>();
+    for (const r of results) {
+      const w = rt.repos.get(r.repositoryId);
+      if (!w || !r.branch || !r.commitSha || done.has(`${w.root ?? w.wt}|${r.branch}`)) continue;
+      done.add(`${w.root ?? w.wt}|${r.branch}`);
+      const why = await gitManager.checkoutForReview(w.cfg, w.root ?? w.wt, r.branch).catch((e) => (e instanceof GitError ? `${e.message}: ${firstLine(e.output, 160)}` : (e as Error).message));
+      const mine = gitManager.repoPath(w.cfg);
+      const line = why ? `No dejé tu repo en \`${r.branch}\`: ${why}.` : `Tu repo local (${mine}) quedó en \`${r.branch}\` para revisión.`;
+      lines.push(line);
+      this.emit(id, agentId, { provider: "git", sessionId: null, type: "AGENT_STATUS", title: why ? `Revisión local: no se cambió tu repo a ${r.branch}` : `Tu repo quedó en ${r.branch} para revisión`, detail: line, status: why ? "warning" : "success", metadata: { reviewBranch: r.branch } });
+    }
+    return lines;
   }
 
   /** Suma los tokens de un turno a la misión (y al paso, si lo hay). */
@@ -338,7 +359,7 @@ export class AgentOrchestrator {
       // 1) Git: fetch + worktree por repositorio (en paralelo; sin ramas todavía)
       this.setMission(id, { status: "preparing" });
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STARTED", title: multi ? `Preparando ${rs.length} espacios de trabajo (${rs.map((r) => r.name).join(" + ")})` : "Preparando espacio de trabajo", status: "running" });
-      await Promise.all(
+      const prepared = await Promise.all(
         rs.map(async (r) => {
           let base = baseOf(r);
           const repoPath = await gitManager.ensureClone(r);
@@ -355,11 +376,25 @@ export class AgentOrchestrator {
             this.setMission(id, multi ? { repos: mission.repos } : { baseBranch: base });
           }
           if (!(await gitManager.remoteBranchExists(r, base))) throw new GitError(`La rama base origin/${base} no existe en ${r.github}`, "");
-          const wt = await gitManager.createWorktree(r, id, base);
-          rt.repos.set(r.id, { cfg: r, base, wt });
-          this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_WORKTREE", title: `Worktree aislado listo${multi ? ` · ${r.name}` : ""} (sin rama)`, detail: `${wt}\nCopia de origin/${base}; la rama solo se crea si hay cambios.`, status: "success", metadata: { worktree: wt, base, repositoryId: r.id } });
+          return { r, base, ...(await gitManager.layout(r)) };
         }),
       );
+      // Monorepo: partes que son el MISMO repositorio git (p. ej. aplicaciones/api y el admin) y parten de la misma
+      // rama comparten UNA carpeta de trabajo y UNA rama; cada parte trabaja en su subcarpeta.
+      const roots = new Map<string, string>();
+      for (const p of prepared) {
+        const key = `${p.top}|${p.base}`;
+        const shared = prepared.filter((x) => `${x.top}|${x.base}` === key).length > 1;
+        let root = roots.get(key);
+        if (!root) {
+          root = await gitManager.createWorktree(p.r, id, p.base, shared ? `mono-${path.basename(p.top)}` : p.r.shortName);
+          roots.set(key, root);
+          if (shared) this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: `${path.basename(p.top)} es un solo repositorio: una carpeta y una rama para todas sus partes`, detail: prepared.filter((x) => `${x.top}|${x.base}` === key).map((x) => `• ${x.r.name}${x.prefix ? ` → ${x.prefix}/` : ""}`).join("\n"), status: "info" });
+        }
+        const wt = shared && p.prefix ? path.join(root, p.prefix) : root;
+        rt.repos.set(p.r.id, { cfg: p.r, base: p.base, wt, root });
+        this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_WORKTREE", title: `Worktree aislado listo${multi ? ` · ${p.r.name}` : ""} (sin rama)`, detail: `${wt}\nCopia de origin/${p.base}; la rama solo se crea si hay cambios.`, status: "success", metadata: { worktree: wt, base: p.base, repositoryId: p.r.id } });
+      }
       const primary = rt.repos.get(rs[0].id)!;
       this.setMission(id, { worktree: primary.wt, ...(multi ? { repos: mission.repos.map((x) => ({ ...x, worktree: rt.repos.get(x.repositoryId)?.wt ?? null })) } : {}) });
       if (rt.cancelled) throw new MissionError("Cancelada");
@@ -385,7 +420,21 @@ export class AgentOrchestrator {
       this.setMission(id, { status: "committing" });
       const prefs = this.prefsFor(repo.getMission(id) ?? mission);
       const results: MissionRepo[] = [];
-      for (const r of rs) results.push(await this.deliverRepo(id, mission, rt.repos.get(r.id)!, steps, rt, prefs, multi));
+      // Una entrega por carpeta: las partes de un monorepo comparten rama y commit.
+      const delivered = new Map<string, MissionRepo>();
+      for (const r of rs) {
+        const w = rt.repos.get(r.id)!;
+        const root = w.root ?? w.wt;
+        const prev = delivered.get(root);
+        if (prev) {
+          results.push({ ...prev, repositoryId: r.id, baseBranch: w.base, worktree: w.wt });
+          continue;
+        }
+        const shared = [...rt.repos.values()].filter((x) => (x.root ?? x.wt) === root).length > 1;
+        const res = await this.deliverRepo(id, mission, shared ? { ...w, wt: root } : w, steps, rt, prefs, multi);
+        delivered.set(root, res);
+        results.push({ ...res, repositoryId: r.id, worktree: w.wt });
+      }
       const main = results.find((x) => x.commitSha) ?? results[0];
       this.setMission(id, {
         branch: main.branch,
@@ -397,7 +446,8 @@ export class AgentOrchestrator {
       if (!results.some((x) => x.commitSha)) this.emit(id, "atlas", { provider: "git", sessionId: null, type: "AGENT_STATUS", title: "Sin cambios: no se crea rama ni commit", status: "info" });
 
       // 5) GitHub Actions: esperar a que quede en verde; si falla por los cambios de la misión, corregir y volver a publicar.
-      const toCheck = results.filter((x) => x.pushed && x.commitSha && x.branch);
+      const seenBranch = new Set<string>();
+      const toCheck = results.filter((x) => x.pushed && x.commitSha && x.branch && !seenBranch.has(x.branch) && !!seenBranch.add(x.branch));
       if (config.ciWaitEnabled && toCheck.length) {
         this.setMission(id, { status: "ci" });
         const ci = await Promise.all(toCheck.map((x) => this.ciLoop(id, mission, rt.repos.get(x.repositoryId)!, x, steps, rt, multi)));
@@ -407,6 +457,9 @@ export class AgentOrchestrator {
         const red = ci.filter((c) => c.state === "failure" || c.state === "timeout");
         if (red.length) throw new MissionError(`GitHub Actions no quedó en verde: ${red.map((c) => `${multi ? `${c.repositoryId}: ` : ""}${c.detail}`).join("; ")}`);
       }
+
+      // "Deja mi repo en la rama para revisarla": tu repo local queda en la rama de la misión (si no tiene cambios sin guardar).
+      if (prefs.reviewLocal) await this.reviewLocally(id, rt, results);
 
       this.setMission(id, { status: "done" });
       this.emit(id, "atlas", { provider: "system", sessionId: null, type: "AGENT_FINISHED", title: `Misión ${id} completada`, detail: repo.getMission(id)?.summary ?? null, status: "success", metadata: { missionDone: true, sha: main.commitSha, branch: main.branch } });
@@ -1569,6 +1622,11 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
 
     // Mismas variables que el CI del repo (APP_ENV, DB_*…) y, si prueba contra MySQL, que la base responda.
     const env = qaEnvFor(r);
+    // Laravel sin variables de QA configuradas: APP_KEY y APP_ENV de prueba (efímeros; nunca se escriben en el repo).
+    if (fs.existsSync(path.join(wt, "artisan"))) {
+      env.APP_ENV ??= "testing";
+      env.APP_KEY ??= `base64:${randomBytes(32).toString("base64")}`;
+    }
     const pre = await qaPreflight(env);
     if (pre) return this.qaUnavailable(id, step, r, tag, pre);
 
@@ -1817,8 +1875,9 @@ Termina con "RESUMEN:" y una frase corta.`;
 - Si pide modificar, corregir, revertir, deshacer, quitar o agregar algo en el código → hazlo en tu carpeta (${target.cfg.name}: ${target.wt}) con el cambio mínimo y correcto${target.cfg.checkCommand ? `; verifica con \`${target.cfg.checkCommand}\` o la parte relevante` : ""}. No toques dependencias, lockfiles ni configuración de CI salvo que lo pida. No hagas git commit/push ni cambies de rama: la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions. Si su pedido corrige algo que el equipo debió hacer bien desde el inicio y es reutilizable, agrega una línea "LECCIÓN: …" con la regla general.
 - Si pide publicar (o reintentar la publicación) de lo que ya está hecho → no cambies nada.
 - Si pide que la entrega quede directo en la rama base / la misma rama (sin la rama agentic/…) → no cambies nada.
+- Si pide que SU repositorio local quede en la rama de la misión para revisarla → no cambies nada.
 - Si no está claro si quiere que cambies código → pregúntale antes de tocar nada.
-Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "ACCIÓN: cambio", "ACCIÓN: publicar", "ACCIÓN: publicar_en_base".`
+Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "ACCIÓN: cambio", "ACCIÓN: publicar", "ACCIÓN: publicar_en_base", "ACCIÓN: preparar_revision".`
       : (targetIssue ?? "No modifiques archivos en esta conversación: si el usuario pide un cambio de código, sugiere lanzar una misión.");
     const state = mission ? this.missionState(mission) : "";
     let prompt = `${state}${intentNote}\n\nMensaje del usuario: ${message}`;
@@ -1875,7 +1934,7 @@ Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "AC
       }
       // Lo que el agente entendió y declaró; si no lo declaró, se juzga por lo que hizo (¿cambió archivos?).
       const changed = (await gitManager.status(target.wt).catch(() => "")) !== before;
-      const declared = finalText.match(/^\s*\**\s*ACCI[OÓ]N\s*\**\s*:\s*\**\s*(respuesta|cambio|publicar_en_base|publicar)\b/im)?.[1]?.toLowerCase() as ChatAction | undefined;
+      const declared = finalText.match(/^\s*\**\s*ACCI[OÓ]N\s*\**\s*:\s*\**\s*(respuesta|cambio|publicar_en_base|preparar_revision|publicar)\b/im)?.[1]?.toLowerCase() as ChatAction | undefined;
       const action: ChatAction = declared ?? (changed ? "cambio" : "respuesta");
       if (declared) this.emit(mission.id, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${getAgent(agentId).name} entendió: ${CHAT_ACTION_LABEL[action]}`, status: "info", metadata: { chat: true, chatAction: action } });
       // El chat queda libre apenas responde; publicar y esperar GitHub Actions sigue en segundo plano (con avisos en el chat).
@@ -1901,6 +1960,28 @@ Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "AC
         if (lessons.length) this.learn(mission.id, agentId, lessons.slice(0, 1), target.cfg.id, "correccion");
         recordCorrection(mission.lessonIds ?? [], mission.id);
       }
+      if (action === "preparar_revision") {
+        // Si hay cambios sin entregar, primero se guardan en la rama de la misión (sin publicar si así se pidió).
+        if (changed) await this.deliverChatChange(mission, agentId, target, message).catch(gitFail("No pude guardar el cambio"));
+        const fresh = repo.getMission(mission.id) ?? mission;
+        const results: MissionRepo[] = fresh.repos.length
+          ? fresh.repos
+          : [{ repositoryId: fresh.repositoryId, baseBranch: fresh.baseBranch, worktree: fresh.worktree, branch: fresh.branch, commitSha: fresh.commitSha, pushed: fresh.pushed, prUrl: fresh.prUrl }];
+        const rtv = newRuntime();
+        for (const r of results) {
+          if (!r.worktree || !fs.existsSync(r.worktree)) continue;
+          try {
+            const cfg = this.repoConfig(r.repositoryId);
+            const root = await this.worktreeRoot(r.worktree);
+            rtv.repos.set(r.repositoryId, { cfg, base: r.baseBranch, wt: r.worktree, root });
+          } catch {
+            /* repo deshabilitado */
+          }
+        }
+        const lines = await this.reviewLocally(mission.id, rtv, results, agentId);
+        this.chatNote(mission.id, agentId, lines.join("\n") || "No hay una rama de la misión con commits que dejar en tu repo (¿la misión no dejó cambios?).");
+        return;
+      }
       if (action === "publicar_en_base") {
         if (changed) await this.deliverChatChange(mission, agentId, target, message).catch(gitFail("No pude publicar el cambio"));
         const fresh = repo.getMission(mission.id) ?? mission;
@@ -1910,6 +1991,12 @@ Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "AC
       }
       await this.deliverChatChange(mission, agentId, target, message).catch(gitFail(action === "publicar" ? "Sigo sin poder publicar" : "No pude publicar el cambio"));
     })();
+  }
+
+  /** Raíz del worktree de una carpeta (en un monorepo, la carpeta puede ser una subcarpeta). */
+  private async worktreeRoot(dir: string): Promise<string> {
+    const r = await runGit(["rev-parse", "--show-toplevel"], dir);
+    return r ? path.resolve(r) : dir;
   }
 
   /** Entregas de la misión que están en una rama agentic/… (candidatas a pasarse a la rama base). */
@@ -2064,8 +2151,15 @@ function roleOf(step?: MissionStep): EngineRole {
   return step.writes ? "implement" : "research";
 }
 
-type ChatAction = "respuesta" | "cambio" | "publicar" | "publicar_en_base";
+type ChatAction = "respuesta" | "cambio" | "publicar" | "publicar_en_base" | "preparar_revision";
+
+async function runGit(args: string[], cwd: string): Promise<string | null> {
+  const { run } = await import("../runtime/processUtils");
+  const r = await run("git", args, { cwd, timeoutMs: 30_000 }).catch(() => null);
+  return r && r.code === 0 ? r.stdout.trim() : null;
+}
 const CHAT_ACTION_LABEL: Record<ChatAction, string> = {
+  preparar_revision: "dejar tu repo local en la rama de la misión para revisión",
   respuesta: "solo responder (sin cambiar archivos)",
   cambio: "cambiar el código y publicarlo",
   publicar: "publicar lo que ya está hecho",

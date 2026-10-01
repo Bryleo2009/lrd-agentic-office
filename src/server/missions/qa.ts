@@ -37,8 +37,8 @@ export function detectQa(wt: string, repo: RepositoryConfig): QaPlan {
       if (repo.installCommand) setup.push(repo.installCommand);
       else if (fs.existsSync(path.join(wt, "pnpm-lock.yaml"))) setup.push("pnpm install --frozen-lockfile");
       else if (fs.existsSync(path.join(wt, "yarn.lock"))) setup.push("yarn install --frozen-lockfile");
-      else if (fs.existsSync(path.join(wt, "package-lock.json"))) setup.push("npm ci");
-      else setup.push("npm install");
+      else if (fs.existsSync(path.join(wt, "package-lock.json"))) setup.push("npm ci --include=dev");
+      else setup.push("npm install --include=dev");
     }
   }
   if (fs.existsSync(path.join(wt, "composer.json")) && !fs.existsSync(path.join(wt, "vendor"))) {

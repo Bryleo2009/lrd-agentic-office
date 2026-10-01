@@ -278,3 +278,19 @@ test("modelo por rol: por defecto lo potente solo para implementar y corregir", 
   assert.equal(ENGINE_MODELS.codex.chat.effort, "low");
   assert.equal(ENGINE_MODELS.codex.implement.effort, null);
 });
+
+test("checklist: 'no aplica' solo lo decide la revisión; NODE_ENV no se cuela; 'revisión humana' se entiende como respaldo", async () => {
+  const { applyChecklistMarks, makeChecklist } = await import("../src/server/missions/checklist");
+  const items = makeChecklist(["Login 401", "Sidebar"]);
+  const byDev = applyChecklistMarks(items, "NO_APLICA: 1 — es del backend\nHECHO: 2", "mica");
+  assert.equal(byDev.items[0].status, "pending", "que no sea de mi tarea no lo da por cumplido");
+  assert.equal(byDev.items[1].status, "done");
+  assert.equal(applyChecklistMarks(items, "NO_APLICA: 1 — no corresponde a esta misión", "atlas").items[0].status, "skipped");
+  const { childEnv } = await import("../src/server/runtime/processUtils");
+  process.env.NODE_ENV = "production";
+  assert.equal(childEnv().NODE_ENV, undefined, "npm no omite las devDependencies en QA ni en agentes");
+  delete process.env.NODE_ENV;
+  const { deliveryPrefs } = await import("../src/server/missions/MissionPlanner");
+  const d = deliveryPrefs("al finalizar los cambios no publicarlos, cambiar el repositorio a dicha rama para una revisión humana");
+  assert.deepEqual(d, { publish: false, directToBase: false, reviewLocal: true });
+});

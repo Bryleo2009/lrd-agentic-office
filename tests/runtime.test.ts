@@ -173,11 +173,11 @@ test("planner: decide Atlas (no las palabras); si planifica cambios, no se degra
   const code = JSON.stringify({ deliverable: "code_change", delivery: { publish: true, directToBase: true }, steps: [{ id: "s1", agent: "diego", title: "Corregir", task: "x", dependsOn: [], writes: true }] });
   const p = parsePlan(code, "Analiza la rama feature/x; si no pasa por el embudo, corrígelo sobre la misma rama");
   assert.equal(p?.steps[0].writes, true);
-  assert.deepEqual(p?.delivery, { publish: true, directToBase: true }, "cómo entregar lo decide Atlas");
+  assert.deepEqual(p?.delivery, { publish: true, directToBase: true, reviewLocal: false }, "cómo entregar lo decide Atlas");
 });
 
 test("entrega: por defecto rama nueva publicada; la misión puede pedir lo contrario", () => {
-  assert.deepEqual(deliveryPrefs("Corrige el CI de fase3.1"), { publish: true, directToBase: false });
+  assert.deepEqual(deliveryPrefs("Corrige el CI de fase3.1"), { publish: true, directToBase: false, reviewLocal: false });
   assert.equal(deliveryPrefs("Corrige el CI pero no publiques la rama").publish, false);
   assert.equal(deliveryPrefs("Arregla el bug, solo local").publish, false);
   assert.equal(deliveryPrefs("Corrige esto directamente en la rama base").directToBase, true);
