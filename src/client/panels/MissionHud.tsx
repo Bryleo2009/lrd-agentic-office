@@ -25,7 +25,9 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
       <button className="hud-head" onClick={() => setCollapsed(!collapsed)}>
         <span className={`status-pill ${current.status}`}>{MISSION_STATUS[current.status]}</span>
         <span className="hud-id">#{current.id}</span>
-        <span className="hud-engine">{current.provider === "codex" ? "Codex" : "Claude Code"}</span>
+        <span className="hud-engine" title="Motores que usaron los pasos de esta misión (la revisión cruzada usa a propósito el otro motor)">
+          {engineLabel(current)}
+        </span>
         <span className="chev">{collapsed ? "▸" : "▾"}</span>
       </button>
       {/* Una pregunta abierta siempre se ve, aunque la tarjeta esté plegada. */}
@@ -42,7 +44,10 @@ export function MissionHud({ onAgent }: { onAgent: (id: any) => void }) {
                 <button key={s.id} className={`step ${s.status}`} onClick={() => onAgent(s.agentId)} title={`${s.title} · ${STEP_STATUS[s.status]}${s.provider ? ` · ${s.provider === "codex" ? "Codex" : "Claude Code"}` : ""}${s.error ? `\n${s.error}` : ""}`}>
                   <i style={{ background: a.color }} />
                   <span>{a.name}</span>
-                  <small>{s.kind === "xreview" ? "revisión cruzada" : s.kind === "ci" ? "Actions" : s.kind === "qa" ? "QA" : s.kind === "review" ? "revisión" : s.kind === "plan" ? "plan" : s.writes ? "cambios" : "análisis"}</small>
+                  <small>
+                    {s.kind === "xreview" ? "revisión cruzada" : s.kind === "ci" ? "Actions" : s.kind === "qa" ? "QA" : s.kind === "review" ? "revisión" : s.kind === "plan" ? "plan" : s.writes ? "cambios" : "análisis"}
+                    {s.provider ? ` · ${s.provider === "codex" ? "Codex" : "Claude"}` : ""}
+                  </small>
                 </button>
               );
             })}
@@ -190,4 +195,12 @@ export function QuestionCard({ mission, q }: { mission: Mission; q: MissionQuest
       {q.fallback && <div className="muted tiny">Si no respondes a tiempo: {q.fallback}</div>}
     </div>
   );
+}
+
+/** Motores reales de la misión: los que usaron sus pasos (o el principal, si aún no empezó ninguno). */
+function engineLabel(m: Mission): string {
+  const used = [...new Set(m.steps.map((s) => s.provider).filter(Boolean))];
+  if (used.length > 1) return "Codex + Claude Code";
+  const p = used[0] ?? m.provider;
+  return p === "codex" ? "Codex" : "Claude Code";
 }
