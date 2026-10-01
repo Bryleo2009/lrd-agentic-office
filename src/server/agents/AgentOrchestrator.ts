@@ -14,7 +14,7 @@ import { guideFor, TASK_KIND_LABEL, taskKind } from "../missions/guides";
 import { ASK_RULE, extractQuestion, pickOption, questionKey } from "../missions/questions";
 import { migrationFiles, scanSecrets } from "../missions/secrets";
 import { libraryPrompt, relatedDocs, saveDoc, type NewDoc } from "../library";
-import { buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { buildPlannerPrompt, ciRunRef, projectBrief, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
 import { detectQa, environmentProblem, failureLine, qaEnvFor, qaPreflight, runShell } from "../missions/qa";
@@ -111,7 +111,7 @@ export class AgentOrchestrator {
   private repoConfig(id: string): RepositoryConfig {
     const r = loadRepositories().repositories.find((x) => x.id === id);
     if (!r) throw new MissionError(`Repositorio desconocido: ${id}`);
-    if (!r.enabled) throw new MissionError(`Repositorio ${id} deshabilitado en config/repositories.json`);
+    if (!r.enabled) throw new MissionError(`Repositorio ${id} deshabilitado: agrégalo en Ajustes → Repositorios (o pon "enabled": true en config/repositories.json)`);
     return r;
   }
 
@@ -1280,7 +1280,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     const where =
       m.repositoryId === NO_REPO || !w
         ? "Misión sin repositorio (análisis / datos)."
-        : `Repositorio: ${w.cfg.name} (${w.cfg.github}, ${w.cfg.kind ?? "otro"}). Tu carpeta es una copia aislada de origin/${w.base} con HEAD separado (detached) A PROPÓSITO: la rama${
+        : `Repositorio: ${w.cfg.name} (${w.cfg.github}, ${w.cfg.kind ?? "otro"}).${projectBrief(w.cfg)}\nTu carpeta es una copia aislada de origin/${w.base} con HEAD separado (detached) A PROPÓSITO: la rama${
             requestedBranch(m.prompt) ? ` ${requestedBranch(m.prompt)}` : " agentic/…"
           } la crea el orquestador al final si hay cambios, y la publica. Para verificar la base usa \`git rev-parse HEAD origin/${w.base}\` (deben coincidir); que no haya rama activa es lo esperado, no un error.${
             others.length ? `\nEsta misión se trabaja en paralelo también en ${others.map((x) => x.cfg.name).join(", ")} (otro compañero se encarga): tú solo trabajas en ${w.cfg.name}. Respeta el contrato acordado en la tarea.` : ""
@@ -1524,7 +1524,9 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
   }
 
   private async runQaStep(id: string, w: WorkRepo, step: MissionStep, rt: MissionRuntime): Promise<void> {
-    const { cfg: r, wt } = w;
+    const { cfg: r } = w;
+    // Monorepo: QA corre en la subcarpeta del proyecto (el diff de git cubre igual todo el repo).
+    const wt = r.workdir && fs.existsSync(path.join(w.wt, r.workdir)) ? path.join(w.wt, r.workdir) : w.wt;
     const multi = rt.repos.size > 1;
     const tag = multi ? ` · ${r.name}` : "";
     this.setStep(id, step, { status: "running", provider: null, startedAt: new Date().toISOString() });

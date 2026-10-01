@@ -96,10 +96,12 @@ export const paths = {
   worktrees: path.join(config.workspaceRoot, "worktrees"),
   runs: path.join(config.workspaceRoot, "runs"),
   db: path.join(config.workspaceRoot, "office.db"),
+  /** Proyectos que agregaste desde Ajustes (ruta local + repositorio). */
+  projects: path.join(config.workspaceRoot, "projects.json"),
 };
 
 export function ensureWorkspace(): void {
-  for (const p of Object.values(paths)) if (!p.endsWith(".db")) fs.mkdirSync(p, { recursive: true });
+  for (const p of Object.values(paths)) if (!path.extname(p)) fs.mkdirSync(p, { recursive: true });
 }
 
 interface ReposFile {
@@ -107,10 +109,32 @@ interface ReposFile {
   protectedBranches?: string[];
 }
 
+/** Proyectos agregados desde Ajustes (<workspace>/projects.json). */
+export function loadCustomProjects(): RepositoryConfig[] {
+  try {
+    const j = JSON.parse(fs.readFileSync(paths.projects, "utf8")) as { projects?: RepositoryConfig[] };
+    return Array.isArray(j.projects) ? j.projects.filter((p) => p && typeof p.id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Repositorios de config/repositories.json + los proyectos que agregaste. Un proyecto con el mismo id que uno
+ * del archivo lo reemplaza (y lo habilita): así puedes activar OfSystem/ERP desde Ajustes sin editar el JSON.
+ */
 export function loadRepositories(): { repositories: RepositoryConfig[]; protectedBranches: string[] } {
   const raw = JSON.parse(fs.readFileSync(config.reposFile, "utf8")) as ReposFile;
-  const protectedBranches = raw.protectedBranches ?? ["main", "release/fase2", "release/fase3.1"];
-  return { repositories: raw.repositories, protectedBranches };
+  const custom = loadCustomProjects();
+  const repositories = raw.repositories.map((r) => {
+    const c = custom.find((x) => x.id === r.id);
+    return c ? { ...r, ...c, enabled: true, custom: true } : r;
+  });
+  for (const c of custom) if (!repositories.some((r) => r.id === c.id)) repositories.push({ ...c, enabled: true, custom: true });
+  const protectedBranches = [
+    ...new Set([...(raw.protectedBranches ?? ["main", "release/fase2", "release/fase3.1"]), ...custom.flatMap((c) => c.protectedBranches ?? [])]),
+  ];
+  return { repositories, protectedBranches };
 }
 
 export function publicConfig(): PublicConfig {

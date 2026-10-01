@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isToolMcp, lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
+import { isToolMcp, lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type ProjectInspection, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
 import { api } from "../app/api";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
@@ -311,23 +311,33 @@ function deptLabel(d: string) {
 
 function ReposTab() {
   const repos = useStore((s) => s.repositories);
+  // null = cerrado; "new" = proyecto nuevo; si no, el repositorio que se edita.
+  const [form, setForm] = useState<RepositoryConfig | "new" | null>(null);
   return (
     <div className="repos">
       <p className="fineprint">
         Indica dónde tienes clonado cada repositorio en esta PC. La oficina usará tu clon para hacer <code>git fetch</code> y crear los worktrees de cada misión:
         tu rama actual y tus cambios sin commitear <b>no se tocan</b>. Solo si una misión deja cambios se crea una rama <code>agentic/…</code> y se publica para evaluación. Si lo dejas vacío, la app mantiene su propio clon.
       </p>
+      {form ? (
+        <ProjectForm key={form === "new" ? "new" : form.id} initial={form === "new" ? null : form} onClose={() => setForm(null)} />
+      ) : (
+        <button className="btn primary" onClick={() => setForm("new")}>
+          + Agregar proyecto
+        </button>
+      )}
       {repos.map((r) => (
-        <RepoRow key={r.id} repo={r} />
+        <RepoRow key={r.id} repo={r} onEdit={() => setForm(r)} />
       ))}
       <p className="fineprint">
-        Para habilitar OfSystem, ERP u otros, cambia <code>"enabled": true</code> en <code>config/repositories.json</code>.
+        Con <b>+ Agregar proyecto</b> eliges la carpeta de tu PC y su repositorio de GitHub; la oficina detecta cómo está armado (tecnologías, tipo, ramas y
+        comandos de prueba) y tú lo ajustas. También sirve para activar OfSystem, ERP u otros de <code>config/repositories.json</code>.
       </p>
     </div>
   );
 }
 
-function RepoRow({ repo }: { repo: RepositoryConfig }) {
+function RepoRow({ repo, onEdit }: { repo: RepositoryConfig; onEdit: () => void }) {
   const [p, setP] = useState(repo.localPath ?? "");
   const [msg, setMsg] = useState<{ ok: boolean; message: string } | null>(repo.localStatus ?? null);
   const [busy, setBusy] = useState(false);
@@ -343,26 +353,246 @@ function RepoRow({ repo }: { repo: RepositoryConfig }) {
       setBusy(false);
     }
   };
+  const remove = async () => {
+    if (!confirm(`¿Quitar ${repo.name} de la oficina? Tu carpeta y el repositorio no se tocan.`)) return;
+    setBusy(true);
+    try {
+      await api.removeProject(repo.id);
+    } catch (e) {
+      setMsg({ ok: false, message: (e as Error).message });
+      setBusy(false);
+    }
+  };
   return (
     <div className={`repo-row ${repo.enabled ? "" : "disabled"}`}>
       <div className="repo-head">
         <b>{repo.name}</b>
         <span className="muted">{repo.github}</span>
+        {repo.stack && <span className="muted">· {repo.stack}</span>}
+        {repo.workdir && <span className="muted">· carpeta {repo.workdir}</span>}
         {!repo.enabled && <span className="mini-pill bad">deshabilitado</span>}
+        {repo.custom && <span className="mini-pill">agregado por ti</span>}
         {repo.localPath && <span className="mini-pill ok">usa tu clon</span>}
+        <span className="grow" />
+        <button className="btn tiny ghost" disabled={busy} onClick={onEdit}>
+          {repo.custom ? "Editar" : repo.enabled ? "Ajustar" : "Activar"}
+        </button>
+        {repo.custom && (
+          <button className="btn tiny ghost" disabled={busy} onClick={remove}>
+            Quitar
+          </button>
+        )}
       </div>
       <div className="repo-input">
-        <input value={p} placeholder={repo.kind === "frontend" ? "C:\\proyectos\\lrd-front  o  ~/proyectos/lrd-front" : "C:\\proyectos\\lrd-back  o  ~/proyectos/lrd-back"} onChange={(e) => setP(e.target.value)} />
+        <input value={p} placeholder={`C:\\proyectos\\${repo.name}  o  ~/proyectos/${repo.name}`} onChange={(e) => setP(e.target.value)} />
         <button className="btn" disabled={busy || !p.trim()} onClick={() => save(p)}>
           {busy ? "Validando…" : "Guardar"}
         </button>
         {repo.localPath && (
           <button className="btn ghost" disabled={busy} onClick={() => save(null)}>
-            Quitar
+            Quitar ruta
           </button>
         )}
       </div>
       {msg && <div className={msg.ok ? "ok-text" : "err-text"}>{msg.message}</div>}
+    </div>
+  );
+}
+
+/** Etapas de QA ↔ texto: un comando por línea; una línea en blanco separa etapas (lo de una etapa corre en paralelo). */
+const stagesToText = (st: string[][] | undefined) => (st ?? []).map((s) => s.join("\n")).join("\n\n");
+const textToStages = (t: string) =>
+  t
+    .split(/\n\s*\n/)
+    .map((b) => b.split("\n").map((c) => c.trim()).filter(Boolean))
+    .filter((s) => s.length);
+const listToText = (l: string[] | undefined) => (l ?? []).join(", ");
+const textToList = (t: string) => t.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+
+/**
+ * Agregar o editar un proyecto: carpeta local + repositorio → la oficina analiza la estructura y propone la
+ * configuración, que se puede ajustar antes de guardar.
+ */
+function ProjectForm({ initial, onClose }: { initial: RepositoryConfig | null; onClose: () => void }) {
+  const [path, setPath] = useState(initial?.localPath ?? "");
+  const [github, setGithub] = useState(initial?.github ?? "");
+  const [info, setInfo] = useState<ProjectInspection | null>(null);
+  const [d, setD] = useState<RepositoryConfig | null>(null);
+  const [qa, setQa] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const analyze = async (workdir?: string | null) => {
+    setBusy(true);
+    setErr(null);
+    setSaved(null);
+    try {
+      const r = await api.inspectProject({ path, github: github || null, workdir: workdir ?? initial?.workdir ?? null });
+      setInfo(r);
+      if (!r.ok || !r.draft) {
+        setD(null);
+        setErr(r.message);
+        return;
+      }
+      setD(r.draft);
+      setQa(stagesToText(r.draft.qaStages));
+      if (!github) setGithub(r.draft.github);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Al editar uno existente con carpeta, se analiza de una vez para traer sus ramas.
+  useEffect(() => {
+    if (initial?.localPath) void analyze();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const set = <K extends keyof RepositoryConfig>(k: K, v: RepositoryConfig[K]) => setD((x) => (x ? { ...x, [k]: v } : x));
+  const save = async () => {
+    if (!d) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.saveProject({ ...d, qaStages: textToStages(qa) }, d.localPath ?? path);
+      setSaved(`${r.project.name} listo: ya puedes elegirlo en Nueva misión. ${r.status.message}`);
+      setTimeout(onClose, 1500);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggleBase = (b: string) => d && set("allowedBases", d.allowedBases.includes(b) ? d.allowedBases.filter((x) => x !== b) : [...d.allowedBases, b]);
+
+  return (
+    <div className="repo-row project-form editor">
+      <div className="section-title">{initial ? `Configurar ${initial.name}` : "Nuevo proyecto"}</div>
+      <div className="row2">
+        <label>
+          <span>Carpeta en esta PC</span>
+          <input className="mono" value={path} placeholder="C:\proyectos\mi-api  o  ~/proyectos/mi-api" onChange={(e) => setPath(e.target.value)} />
+        </label>
+        <label>
+          <span>Repositorio de GitHub (opcional si la carpeta ya tiene origin)</span>
+          <input className="mono" value={github} placeholder="Bryleo2009/mi-api  o  https://github.com/…" onChange={(e) => setGithub(e.target.value)} />
+        </label>
+      </div>
+      <div className="repo-input">
+        <button className="btn" disabled={busy || !path.trim()} onClick={() => analyze(null)}>
+          {busy && !d ? "Analizando…" : d ? "Volver a analizar" : "Analizar carpeta"}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={onClose}>
+          Cancelar
+        </button>
+      </div>
+      {info?.ok && <div className="ok-text">{info.message}</div>}
+      {info?.warnings.map((w) => (
+        <div key={w} className="warn-text fineprint">
+          ⚠ {w}
+        </div>
+      ))}
+      {!!info?.subprojects.length && (
+        <div className="fineprint">
+          Proyectos dentro del repositorio (clic para registrar solo esa carpeta):{" "}
+          {info.subprojects.map((s) => (
+            <button key={s.dir} className="chip" disabled={busy} onClick={() => analyze(s.dir)}>
+              {s.dir} · {s.stack}
+            </button>
+          ))}
+        </div>
+      )}
+      {err && <div className="err-text">{err}</div>}
+
+      {d && (
+        <>
+          <div className="row3">
+            <label>
+              <span>Nombre</span>
+              <input value={d.name} maxLength={80} onChange={(e) => set("name", e.target.value)} />
+            </label>
+            <label>
+              <span>Nombre corto (carpeta del worktree)</span>
+              <input value={d.shortName} maxLength={20} onChange={(e) => set("shortName", e.target.value)} />
+            </label>
+            <label>
+              <span>Tipo</span>
+              <select value={d.kind ?? "other"} onChange={(e) => set("kind", e.target.value as RepositoryConfig["kind"])}>
+                <option value="backend">Backend / API (Diego)</option>
+                <option value="frontend">Frontend / app (Mica)</option>
+                <option value="other">Otro (scripts, librería…)</option>
+              </select>
+            </label>
+          </div>
+          <div className="row3">
+            <label>
+              <span>Tecnologías</span>
+              <input value={d.stack ?? ""} maxLength={120} onChange={(e) => set("stack", e.target.value)} />
+            </label>
+            <label>
+              <span>Subcarpeta del proyecto (monorepo)</span>
+              <input className="mono" value={d.workdir ?? ""} placeholder="vacío = raíz del repo" onChange={(e) => set("workdir", e.target.value)} />
+            </label>
+            <label>
+              <span>Rama base por defecto</span>
+              <select value={d.defaultBase} onChange={(e) => set("defaultBase", e.target.value)}>
+                {(info?.branches ?? [d.defaultBase]).map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div>
+            <span className="label-text">Ramas base permitidas al crear misiones</span>
+            <div className="chips">
+              {[...new Set([...d.allowedBases, ...(info?.branches ?? [])])].slice(0, 30).map((b) => (
+                <button key={b} className={`chip ${d.allowedBases.includes(b) ? "on" : ""}`} onClick={() => toggleBase(b)}>
+                  {d.allowedBases.includes(b) ? "✓ " : ""}
+                  {b}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label>
+            <span>Ramas protegidas (nunca se hace commit/push directo en ellas)</span>
+            <input className="mono" value={listToText(d.protectedBranches)} onChange={(e) => set("protectedBranches", textToList(e.target.value))} />
+          </label>
+          <label>
+            <span>Comandos de QA — uno por línea; una línea en blanco separa etapas (lo de una misma etapa corre en paralelo)</span>
+            <textarea className="mono" rows={5} value={qa} placeholder={"npm run lint\nnpm test\n\nnpm run build"} onChange={(e) => setQa(e.target.value)} />
+          </label>
+          <div className="row2">
+            <label>
+              <span>Chequeo rápido para los agentes (opcional)</span>
+              <input className="mono" value={d.checkCommand ?? ""} placeholder="npm run check" onChange={(e) => set("checkCommand", e.target.value)} />
+            </label>
+            <label>
+              <span>Palabras que lo identifican en modo Automático</span>
+              <input value={listToText(d.keywords)} placeholder="facturación, erp" onChange={(e) => set("keywords", textToList(e.target.value))} />
+            </label>
+          </div>
+          <label>
+            <span>Indicaciones para el equipo (estructura, convenciones, qué no tocar, cómo se prueba…)</span>
+            <textarea
+              rows={4}
+              value={d.notes ?? ""}
+              maxLength={4000}
+              placeholder={"Ej.: Los módulos están en src/modules/<nombre>. No modificar src/legacy.\nLas pruebas necesitan Docker levantado (docker compose up -d db)."}
+              onChange={(e) => set("notes", e.target.value)}
+            />
+          </label>
+          <div className="repo-input">
+            <button className="btn primary" disabled={busy} onClick={save}>
+              {busy ? "Guardando…" : initial ? "Guardar cambios" : "Agregar proyecto"}
+            </button>
+          </div>
+          {saved && <div className="ok-text">{saved}</div>}
+        </>
+      )}
     </div>
   );
 }

@@ -2357,3 +2357,37 @@ label.check input {
     resize: none;
   }
 }
+/* Ajustes → Repositorios: agregar / configurar un proyecto */
+.project-form {
+  border-color: var(--line-strong);
+}
+.project-form .mono,
+.repo-row textarea.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.project-form .label-text {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.project-form .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.project-form .fineprint .chip {
+  margin: 4px 6px 0 0;
+}
+.project-form label {
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 700px) {
+  .project-form .row2,
+  .project-form .row3 {
+    grid-template-columns: 1fr;
+  }
+}

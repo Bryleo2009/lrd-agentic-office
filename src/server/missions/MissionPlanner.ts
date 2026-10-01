@@ -239,6 +239,19 @@ Tienes acceso a servidores MCP con DATOS REALES (${labeled.map((x) => (x.env ? `
 - Indica qué consulta usaste para cada cifra.`;
 }
 
+/**
+ * Lo que el equipo debe saber de un proyecto que no sigue la estructura de lrd-back/lrd-front: tecnologías,
+ * subcarpeta (monorepo), comando de verificación e indicaciones del usuario.
+ */
+export function projectBrief(repo: RepositoryConfig): string {
+  const lines = [
+    repo.stack ? `Tecnologías: ${repo.stack}.` : "",
+    repo.workdir ? `El proyecto vive en la subcarpeta \`${repo.workdir}\` del repositorio: trabaja ahí (rutas y comandos relativos a esa carpeta), salvo que la tarea diga otra cosa.` : "",
+    repo.notes?.trim() ? `Indicaciones del usuario para este proyecto:\n${repo.notes.trim()}` : "",
+  ].filter(Boolean);
+  return lines.length ? `\n${lines.join("\n")}` : "";
+}
+
 /** Repositorio de trabajo con su carpeta (para planificar misiones de varios repos). */
 export interface PlanRepo {
   repo: RepositoryConfig;
@@ -250,12 +263,12 @@ export function buildPlannerPrompt(mission: string, repo: RepositoryConfig | nul
   const roster = team.filter((a) => a.id !== "atlas" && a.id !== "vega").map((a) => `- ${a.id}: ${a.name}, ${a.role}. ${a.tagline}`).join("\n");
   const where = multi.length > 1
     ? `Esta misión abarca VARIOS repositorios que se trabajan EN PARALELO, cada uno en su propia carpeta:
-${multi.map((m) => `- "${m.repo.id}" (${m.repo.kind ?? "otro"}), rama base ${m.base}, carpeta ${m.worktree}`).join("\n")}
+${multi.map((m) => `- "${m.repo.id}" (${m.repo.kind ?? "otro"}${m.repo.stack ? `, ${m.repo.stack}` : ""}), rama base ${m.base}, carpeta ${m.worktree}${m.repo.workdir ? ` (proyecto en la subcarpeta ${m.repo.workdir})` : ""}${m.repo.notes?.trim() ? `\n  Indicaciones: ${m.repo.notes.trim().replace(/\s*\n\s*/g, " ")}` : ""}`).join("\n")}
 Cada paso DEBE indicar "repo" con uno de esos ids. El trabajo de backend va en el repo backend y el de frontend en el frontend.
 Pasos de repos distintos no deben depender entre sí salvo que sea imprescindible: si el front necesita un contrato de la API, descríbelo en el "task" de ambos (endpoint, campos, formato) para que avancen a la vez.
 Puedes leer brevemente ambas carpetas para asignar bien el trabajo.`
     : repo
-    ? `Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.
+    ? `Repositorio: ${repo.name} (${repo.kind ?? "desconocido"}), rama base ${base}. Estás dentro de su worktree.${projectBrief(repo)}
 ${isAnalysisOnly(mission) && mcp.length ? "Es una consulta: NO explores el repositorio; planifica directo con lo que sabes del equipo." : "Si lo necesitas, mira la estructura con 1-2 comandos de lectura como máximo; no hagas un análisis profundo, eso es trabajo de los agentes."}`
     : `Esta misión NO tiene repositorio: es de análisis / datos. Nadie modifica código; todos los pasos son "writes": false.${mcp.length ? " Asigna las consultas de datos a quien mejor encaje (p. ej. Nora para base de datos, Fiona para finanzas, Rafa/Piero para Rappi/PedidosYa)." : ""}`;
   return `Eres Atlas, lead del equipo de agentes de LRD. Tu trabajo AHORA es SOLO planificar (no edites archivos).

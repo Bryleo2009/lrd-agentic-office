@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { isAgentId } from "../shared/agents";
-import type { EngineChoice, Snapshot } from "../shared/types";
+import type { EngineChoice, RepositoryConfig, Snapshot } from "../shared/types";
 import { MissionError, orchestrator } from "./agents/AgentOrchestrator";
 import { sessions as _sessions } from "./agents/AgentSession";
 import { config, loadRepositories, PROJECT_ROOT, publicConfig } from "./config";
@@ -19,6 +19,7 @@ import { cleanupOld } from "./maintenance";
 import { deleteDoc, getDoc, libraryCounts, saveDoc, searchLibrary } from "./library";
 import type { LibraryKind } from "../shared/types";
 import { usageMetrics } from "./metrics";
+import { inspectProject, ProjectError, removeProject, saveProject } from "./projects";
 import { repositoriesWithLocal, resetProfile, setMcpHidden, setRepoPath, team, updateProfile } from "./settings";
 
 void _sessions;
@@ -176,6 +177,26 @@ app.put("/api/repositories/:id/local-path", async (req) => {
   const repositories = await repositoriesWithLocal();
   eventBus.broadcast({ kind: "repositories", repositories });
   return { status, repositories };
+});
+
+// ---------------- proyectos propios: carpeta local + repositorio ----------------
+app.post("/api/projects/inspect", async (req) => {
+  const b = (req.body ?? {}) as { path?: string; github?: string | null; workdir?: string | null };
+  return inspectProject({ path: String(b.path ?? ""), github: b.github ?? null, workdir: b.workdir ?? null });
+});
+app.post("/api/projects", async (req) => {
+  const b = (req.body ?? {}) as { project?: Partial<RepositoryConfig>; path?: string };
+  if (!b.project) throw new ProjectError("Faltan los datos del proyecto");
+  const r = await saveProject(b.project, String(b.path ?? ""));
+  const repositories = await repositoriesWithLocal();
+  eventBus.broadcast({ kind: "repositories", repositories });
+  return { ...r, repositories };
+});
+app.delete("/api/projects/:id", async (req) => {
+  await removeProject((req.params as { id: string }).id);
+  const repositories = await repositoriesWithLocal();
+  eventBus.broadcast({ kind: "repositories", repositories });
+  return { ok: true, repositories };
 });
 
 app.get("/api/events/:id", async (req, reply) => {

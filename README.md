@@ -107,6 +107,30 @@ Pon la ruta de tu clon de `lrd-front` y `lrd-back` (p. ej. `C:\proyectos\lrd-fro
 `git fetch` y para crear los worktrees de cada misión: **tu rama actual y tus cambios sin commitear no se tocan**
 (los worktrees viven en `~/.lrd-agentic-office/worktrees`) y, solo cuando hay cambios, las ramas `agentic/…` aparecen en tu repo (y en `origin`) para que las revises.
 
+### Agregar tus propios proyectos (Ajustes → Repositorios → *+ Agregar proyecto*)
+
+Para que el equipo trabaje en cualquier otro proyecto, sin editar archivos:
+
+1. **Carpeta en esta PC**: la ruta de tu clon (p. ej. `C:\proyectos\mi-api`). Si apuntas a una subcarpeta de un
+   monorepo (p. ej. `C:\proyectos\plataforma\backend`), esa queda como carpeta del proyecto.
+2. **Repositorio de GitHub** (`owner/repo` o la URL): opcional si tu carpeta ya tiene `origin`. Si lo indicas, debe
+   coincidir con el `origin` de la carpeta (es donde se publican las ramas). Si la carpeta no tiene remoto, se agrega `origin`.
+3. **Analizar carpeta**: la oficina hace `git fetch` (sin tocar tu rama ni tus cambios) y detecta cómo está armado:
+   - **Tecnologías y tipo**: Node (Vue, React, Angular, Next, Nuxt, Svelte, Express, NestJS…; npm/pnpm/yarn/bun),
+     PHP (Laravel, Symfony), Python (Django, FastAPI, Flask), Java/Kotlin (Spring Boot, Maven, Gradle, Android),
+     .NET, Go, Rust, Flutter, Ruby/Rails. *Backend* lo trabaja Diego y *Frontend* Mica.
+   - **Comandos de QA** según sus scripts reales (lint, type-check, test, build…; nunca un `lint --fix`).
+   - **Ramas**: base por defecto (`develop` → la principal de origin → `main`/`master`), ramas permitidas y protegidas.
+   - **Monorepos**: si la raíz no es un proyecto, lista las subcarpetas que sí lo son (clic para registrar cada una).
+4. **Ajusta lo que haga falta** (no todos los proyectos tienen la misma estructura) y escribe las **Indicaciones para
+   el equipo**: dónde vive cada cosa, convenciones, qué no tocar, qué necesitan las pruebas. Atlas y los agentes las
+   reciben en cada misión, junto con las tecnologías y la subcarpeta.
+5. **Agregar proyecto**: aparece al instante en *Nueva misión* (y en modo Automático por su nombre o palabras clave).
+
+Se guarda en `<LRD_WORKSPACE_ROOT>/projects.json` (fuera del repo). *Editar* lo vuelve a analizar con tu configuración;
+*Quitar* lo saca de la oficina sin tocar tu carpeta. Con *Activar* / *Ajustar* también puedes habilitar o configurar los
+de `config/repositories.json` (OfSystem, ERP…) sin editar el archivo.
+
 ### Datos reales vía MCP (Ajustes → Datos)
 
 Si tienes un servidor MCP configurado en Codex (`codex mcp list`) o Claude Code (`claude mcp list`), la oficina lo detecta
@@ -196,7 +220,9 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `RETENTION_DAYS` | `14` | Días que se conservan worktrees y logs de misiones terminadas (0 = no limpiar) |
 
 Repositorios en `config/repositories.json` (ya incluye `lrd-back`, `lrd-front` y, deshabilitados,
-`OfSystem`, `erp-ofsystem-back`, `erp-ofsystem-front`, `lrd-deploy-scripts`). Para habilitar uno: `"enabled": true`.
+`OfSystem`, `erp-ofsystem-back`, `erp-ofsystem-front`, `lrd-deploy-scripts`). Para habilitar uno: `"enabled": true`
+(o desde *Ajustes → Repositorios → Activar*). Campos opcionales para proyectos con otra estructura: `workdir`
+(subcarpeta en monorepos), `stack`, `notes` (indicaciones al equipo) y `protectedBranches` (ramas protegidas extra).
 Puedes fijar `qaCommands` (p. ej. `["npm run build"]`) o dejar que se autodetecten. Para controlar el orden usa
 `qaStages`: las etapas van en orden y los comandos de cada etapa corren en paralelo. `checkCommand` es el chequeo
 único del repo que los agentes usan para verificar sus cambios. Configuración actual:
@@ -233,7 +259,7 @@ En Windows, `bash scripts/...` usa el bash de Git for Windows (`C:\Program Files
 | `npm run dev` | Servidor + Vite (HMR) en `:4173` |
 | `npm run build` / `npm start` | Build de producción y servidor |
 | `npm run doctor` | Diagnóstico de herramientas, sesiones y acceso a repos |
-| `npm test` | Pruebas: parsers Codex/Claude, planner, DAG en paralelo, navegación A*, preguntas, secretos, lecciones, limpieza (el test de reinicio necesita `npm run build` antes) |
+| `npm test` | Pruebas: parsers Codex/Claude, planner, proyectos propios (detección, monorepo, registro), DAG en paralelo, navegación A*, preguntas, secretos, lecciones, limpieza (el test de reinicio necesita `npm run build` antes) |
 | `npm run validate:visual` | Corre la oficina 65 s en Chromium y verifica movimiento, colisiones, encuentros, etc. (requiere `npm run dev` y un Chromium para `playwright-core`) |
 | `node scripts/e2e-mission.mjs <url> "<misión>" <repo> <base> <motor>` | Prueba de aceptación end-to-end con motor real y capturas |
 

@@ -1,5 +1,5 @@
 import type { AgentRuntimeEvent } from "../../shared/events";
-import type { AgentId, AgentProfile, CleanupReport, EngineChoice, Lesson, LibraryDoc, LibraryKind, Mission, MissionQuestion, RepositoryConfig, RuntimeStatus, UsageMetrics } from "../../shared/types";
+import type { AgentId, AgentProfile, CleanupReport, EngineChoice, Lesson, LibraryDoc, LibraryKind, Mission, MissionQuestion, ProjectInspection, RepositoryConfig, RuntimeStatus, UsageMetrics } from "../../shared/types";
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -20,6 +20,11 @@ export const api = {
   resetProfile: (id: AgentId) => req<AgentProfile>(`/api/team/${id}/reset`, { method: "POST", body: "{}" }),
   setRepoPath: (id: string, path: string | null) =>
     req<{ status: { ok: boolean; message: string }; repositories: RepositoryConfig[] }>(`/api/repositories/${id}/local-path`, { method: "PUT", body: JSON.stringify({ path }) }),
+  inspectProject: (b: { path: string; github?: string | null; workdir?: string | null }) =>
+    req<ProjectInspection>("/api/projects/inspect", { method: "POST", body: JSON.stringify(b) }),
+  saveProject: (project: RepositoryConfig, path: string) =>
+    req<{ project: RepositoryConfig; status: { ok: boolean; message: string }; repositories: RepositoryConfig[] }>("/api/projects", { method: "POST", body: JSON.stringify({ project, path }) }),
+  removeProject: (id: string) => req<{ ok: boolean; repositories: RepositoryConfig[] }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE", body: "{}" }),
   lessons: () => req<Lesson[]>("/api/lessons"),
   addLesson: (text: string, scope: string) => req<Lesson>("/api/lessons", { method: "POST", body: JSON.stringify({ text, scope }) }),
   deleteLesson: (id: string) => req<{ ok: boolean }>(`/api/lessons/${id}`, { method: "DELETE", body: "{}" }),

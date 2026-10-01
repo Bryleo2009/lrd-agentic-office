@@ -256,6 +256,35 @@ export interface RepositoryConfig {
   /** Ruta de tu clon local en esta PC (Ajustes). Si existe, se usa en lugar de clonar. */
   localPath?: string | null;
   localStatus?: { ok: boolean; message: string; branch?: string | null } | null;
+  /**
+   * Subcarpeta del repositorio donde vive el proyecto (monorepos, p. ej. "backend" o "apps/web").
+   * QA corre ahí y los agentes la reciben como punto de partida. Vacío = raíz del repo.
+   */
+  workdir?: string;
+  /** Tecnologías detectadas (p. ej. "Laravel · PHP", "Vue + Vite · TypeScript"). Se le cuenta al equipo. */
+  stack?: string;
+  /** Indicaciones tuyas sobre el proyecto (estructura, cómo se prueba, qué no tocar). Las reciben Atlas y los agentes. */
+  notes?: string;
+  /** Ramas extra donde la oficina nunca hace commit/push directo (se suman a protectedBranches). */
+  protectedBranches?: string[];
+  /** Proyecto agregado desde Ajustes → Repositorios (se guarda en <workspace>/projects.json). */
+  custom?: boolean;
+}
+
+/** Resultado de analizar una carpeta local para registrarla como proyecto. */
+export interface ProjectInspection {
+  ok: boolean;
+  message: string;
+  /** Avisos que no impiden guardar (origin no es GitHub, sin comandos de QA…). */
+  warnings: string[];
+  /** Configuración propuesta (editable antes de guardar). */
+  draft: RepositoryConfig | null;
+  /** Ramas remotas encontradas (origin/*), para elegir la base. */
+  branches: string[];
+  /** Subcarpetas que parecen proyectos propios (monorepo): se pueden registrar por separado con "workdir". */
+  subprojects: { dir: string; stack: string; kind: NonNullable<RepositoryConfig["kind"]> }[];
+  /** El repositorio ya estaba en config/repositories.json: se reutiliza su configuración. */
+  existing: boolean;
 }
 
 export interface AgentSessionInfo {
