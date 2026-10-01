@@ -5,6 +5,14 @@ import { db, schema, sqlite } from "./db";
 
 const now = () => new Date().toISOString();
 
+function parseJson<T = unknown>(v: string | null | undefined): T | null {
+  try {
+    return v ? (JSON.parse(v) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 function safeList(v: unknown): string[] {
   try {
     const j = JSON.parse(String(v ?? "[]"));
@@ -18,15 +26,15 @@ function safeList(v: unknown): string[] {
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
   db.insert(schema.missions)
-    .values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []), checklist: JSON.stringify(m.checklist ?? []), questions: JSON.stringify(m.questions ?? []), lessonIds: JSON.stringify(m.lessonIds ?? []), delivery: m.delivery ? JSON.stringify(m.delivery) : null })
+    .values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []), checklist: JSON.stringify(m.checklist ?? []), questions: JSON.stringify(m.questions ?? []), lessonIds: JSON.stringify(m.lessonIds ?? []), delivery: m.delivery ? JSON.stringify(m.delivery) : null, usage: m.usage ? JSON.stringify(m.usage) : null })
     .run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  const { mcpServers, repos, ci, checklist, questions, lessonIds, delivery, ...rest } = patch;
+  const { mcpServers, repos, ci, checklist, questions, lessonIds, delivery, usage, ...rest } = patch;
   const json = (k: string, v: unknown) => (v ? { [k]: JSON.stringify(v) } : {});
   db.update(schema.missions)
-    .set({ ...rest, ...json("mcpServers", mcpServers), ...json("repos", repos), ...json("ci", ci), ...json("checklist", checklist), ...json("questions", questions), ...json("lessonIds", lessonIds), ...(delivery !== undefined ? { delivery: delivery ? JSON.stringify(delivery) : null } : {}), updatedAt: now() })
+    .set({ ...rest, ...json("mcpServers", mcpServers), ...json("repos", repos), ...json("ci", ci), ...json("checklist", checklist), ...json("questions", questions), ...json("lessonIds", lessonIds), ...(delivery !== undefined ? { delivery: delivery ? JSON.stringify(delivery) : null } : {}), ...(usage !== undefined ? { usage: usage ? JSON.stringify(usage) : null } : {}), updatedAt: now() })
     .where(eq(schema.missions.id, id))
     .run();
 }
@@ -49,6 +57,7 @@ function rowToStep(r: typeof schema.missionSteps.$inferSelect): MissionStep {
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,
     repositoryId: r.repositoryId ?? null,
+    usage: parseJson(r.usage),
   };
 }
 
@@ -71,7 +80,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], checklist: safeRepos(r.checklist) as unknown as Mission["checklist"], questions: safeRepos(r.questions) as unknown as Mission["questions"], taskKind: (r.taskKind ?? "general") as Mission["taskKind"], lessonIds: safeList(r.lessonIds), delivery: (() => { try { return r.delivery ? JSON.parse(r.delivery) : null; } catch { return null; } })(), steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], checklist: safeRepos(r.checklist) as unknown as Mission["checklist"], questions: safeRepos(r.questions) as unknown as Mission["questions"], taskKind: (r.taskKind ?? "general") as Mission["taskKind"], lessonIds: safeList(r.lessonIds), delivery: parseJson(r.delivery), usage: parseJson(r.usage), steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {
@@ -89,19 +98,20 @@ export function replaceSteps(missionId: string, steps: MissionStep[]): void {
   db.delete(schema.missionSteps).where(eq(schema.missionSteps.missionId, missionId)).run();
   steps.forEach((s, i) => {
     db.insert(schema.missionSteps)
-      .values({ ...s, dependsOn: JSON.stringify(s.dependsOn), position: i })
+      .values({ ...s, dependsOn: JSON.stringify(s.dependsOn), usage: s.usage ? JSON.stringify(s.usage) : null, position: i })
       .run();
   });
 }
 
 export function addStep(step: MissionStep, position: number): void {
-  db.insert(schema.missionSteps).values({ ...step, dependsOn: JSON.stringify(step.dependsOn), position }).run();
+  db.insert(schema.missionSteps).values({ ...step, dependsOn: JSON.stringify(step.dependsOn), usage: step.usage ? JSON.stringify(step.usage) : null, position }).run();
 }
 
 export function updateStep(id: string, patch: Partial<MissionStep>): void {
-  const { dependsOn, ...rest } = patch;
+  const { dependsOn, usage, ...rest } = patch;
   const set: Record<string, unknown> = { ...rest };
   if (dependsOn) set.dependsOn = JSON.stringify(dependsOn);
+  if (usage !== undefined) set.usage = usage ? JSON.stringify(usage) : null;
   db.update(schema.missionSteps).set(set).where(eq(schema.missionSteps.id, id)).run();
 }
 

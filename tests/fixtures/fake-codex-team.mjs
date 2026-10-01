@@ -22,11 +22,11 @@ process.stdin.on("end", () => {
     console.log(JSON.stringify({ type: "error", message: "You've hit your usage limit. Try again in 45 minutes." }));
     process.exit(1);
   }
-  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, engine, pid: process.pid, resumed: input.includes("se interrumpió"), knowsLesson: input.includes("Lecciones de misiones anteriores"), knowsLibrary: input.includes("Documentación del equipo relacionada") }) + "\n");
+  const log = (o) => process.env.FAKE_CALLS && fs.appendFileSync(process.env.FAKE_CALLS, JSON.stringify({ ...o, engine, pid: process.pid, resumed: input.includes("se interrumpió"), knowsLesson: input.includes("Lecciones de misiones anteriores"), knowsLibrary: input.includes("Documentación del equipo relacionada"), effort: a.find((x) => x.startsWith("model_reasoning_effort="))?.split("=")[1]?.replace(/"/g, "") ?? null, chars: input.length }) + "\n");
   const say = (text) => {
     console.log(JSON.stringify({ type: "thread.started", thread_id: `th_${process.pid}` }));
     console.log(JSON.stringify({ type: "item.completed", item: { id: "m", type: "agent_message", text } }));
-    console.log(JSON.stringify({ type: "turn.completed", usage: {} }));
+    console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 200 } }));
   };
   if (input.includes("SOLO planificar")) {
     log({ kind: "plan" });
@@ -58,6 +58,14 @@ process.stdin.on("end", () => {
     fs.writeFileSync(path.join(process.cwd(), "aws.js"), "export const AWS_KEY = process.env.AWS_KEY;\n");
     log({ kind: "secret-fix" });
     return say("Moví la clave a una variable de entorno.\nRESUMEN: secreto quitado");
+  }
+  // Respuesta corta a una pregunta en la misma conversación (la tarea ya la tiene en su sesión).
+  if (input.startsWith("Ya le preguntaste al usuario")) {
+    const answer = input.match(/Su respuesta: "([^"]+)"/)?.[1] ?? "";
+    fs.appendFileSync(path.join(process.cwd(), "cambio-back.txt"), `hecho por back ${Date.now()}\n`);
+    fs.writeFileSync(path.join(process.cwd(), "respuesta.txt"), answer + "\n");
+    log({ kind: "agent", who: "back", followUp: true });
+    return say(`Listo en back con "${answer}".\nHECHO: 1\nRESUMEN: cambio aplicado en back`);
   }
   // Pregunta al usuario (solo el paso del back, y solo hasta recibir la respuesta).
   if (mission.includes("PRUEBA_PREGUNTA") && input.includes("Tu tarea (Endpoint de totales)") && !input.includes("Su respuesta:")) {

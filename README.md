@@ -162,6 +162,16 @@ pantalla), para seguir al equipo en vivo: porcentaje de avance, tiempo transcurr
 último que hizo; *Ubicar* y *Chat*), **Checklist**, **Pasos** (con duración, entrega y GitHub Actions) y **Actividad**.
 Puedes elegir cualquier misión reciente en el selector.
 
+### Consumo de tokens
+
+Cada paso guarda los tokens que informa el motor (entrada, de caché y salida; en Claude también el equivalente en
+US$). Se ven en la **tablet** (total de la misión, por persona y por paso) y por motor en *Ajustes → Uso y limpieza*,
+junto con el **modelo que usa cada rol**. Para gastar menos: implementar y corregir usan el modelo de tu cuenta, y
+planificar, investigar, revisar y chatear uno más liviano (Claude `sonnet`; Codex con menos esfuerzo de razonamiento).
+Si un modelo no está en tu plan, la oficina sigue con el de tu cuenta y avisa. Además, cuando un agente sigue en su
+misma conversación no se le reenvían lecciones, biblioteca ni guía, la respuesta a una pregunta le llega sola (sin
+repetir todo el pedido) y las revisiones reciben diffs e informes recortados (el revisor puede abrir el resto con git).
+
 ### Uso por motor y limpieza (Ajustes → Uso y limpieza)
 
 Pasos, tiempo de trabajo, fallas, límites alcanzados y misiones de Codex y de Claude Code (7/30/90 días), más cuántas
@@ -217,6 +227,8 @@ Cámara: arrastra para mover; rueda del mouse, pinch de trackpad o pinch táctil
 | `QUESTION_TIMEOUT_MIN` / `MAX_QUESTIONS_PER_STEP` | `120` / `2` | Espera por tu respuesta a una pregunta de un agente (0 = sin límite) / preguntas por paso (0 = nunca preguntan) |
 | `SECRET_SCAN` | `true` | Revisar secretos en el diff antes de cada commit/publicación |
 | `REQUIRE_APPROVAL` / `APPROVAL_TIMEOUT_MIN` | `direct,migrations` / `120` | Qué necesita tu aprobación antes de publicar (vacío = nada) / espera; sin respuesta no se publica |
+| `CLAUDE_MODEL_<ROL>` | `sonnet` en PLAN, RESEARCH, REVIEW y CHAT; vacío en IMPLEMENT y FIX | Modelo de Claude Code por rol (vacío = el de tu cuenta). Ahorra tokens: lo más potente solo para implementar y corregir |
+| `CODEX_MODEL_<ROL>` / `CODEX_EFFORT_<ROL>` | vacío / `medium` en PLAN, RESEARCH y REVIEW, `low` en CHAT | Modelo y esfuerzo de razonamiento de Codex por rol (vacío = el de tu cuenta) |
 | `RETENTION_DAYS` | `14` | Días que se conservan worktrees y logs de misiones terminadas (0 = no limpiar) |
 
 Repositorios en `config/repositories.json` (ya incluye `lrd-back`, `lrd-front` y, deshabilitados,

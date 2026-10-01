@@ -187,7 +187,7 @@ export function relatedDocs(text: string, opts: { repoIds?: string[]; excludeMis
 const KIND_LABEL: Record<LibraryKind, string> = { mision: "Misión", informe: "Informe de tarea", investigacion: "Investigación", decision: "Decisión", incidente: "Incidente", manual: "Manual" };
 
 /** Texto para el prompt con extractos de los documentos relacionados. */
-export function libraryPrompt(docs: LibraryDoc[], excerpt = 700): string {
+export function libraryPrompt(docs: LibraryDoc[], excerpt = 500): string {
   if (!docs.length) return "";
   return `\nDocumentación del equipo relacionada (biblioteca). Úsala para no re-investigar lo que ya se sabe; si algo pudo cambiar desde entonces, verifícalo:\n${docs
     .map((d) => {

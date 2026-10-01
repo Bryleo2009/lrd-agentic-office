@@ -95,3 +95,16 @@ export function branchesOf(m: Mission): { repo: string | null; branch: string; s
   if (m.repos?.length > 1) return m.repos.filter((r) => r.branch).map((r) => ({ repo: r.repositoryId, branch: r.branch!, sha: r.commitSha }));
   return m.branch ? [{ repo: null, branch: m.branch, sha: m.commitSha }] : [];
 }
+
+/** "1,2 M", "45 k", "830" tokens. */
+export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(".", ",")} M`;
+  if (n >= 1000) return `${Math.round(n / 1000)} k`;
+  return String(n);
+}
+
+/** Tokens nuevos (no leídos de caché) + salida: lo que más pesa en el consumo. */
+export function tokensLabel(u: { input: number; cached: number; output: number } | null | undefined): string | null {
+  if (!u || !(u.input || u.output)) return null;
+  return `${fmtTokens(u.input + u.output)} tokens${u.cached ? ` (${fmtTokens(u.cached)} en caché)` : ""}`;
+}

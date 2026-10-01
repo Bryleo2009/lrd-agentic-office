@@ -256,3 +256,25 @@ test("chat: 'revierte', 'deshaz' y 'restaura' son pedidos de cambio (no de solo 
     assert.equal(asksChange(t), true, t);
   for (const t of ["¿por qué tocaste composer.json?", "explícame qué hiciste", "¿por qué se borra la orden?", "dime cuánto devuelve el total"]) assert.equal(asksChange(t), false, t);
 });
+
+test("tokens: se normaliza lo que informa cada motor y se suma por misión", async () => {
+  const { normalizeUsage, addMissionUsage } = await import("../src/server/usage");
+  const claude = normalizeUsage("claude", { usage: { input_tokens: 10, cache_creation_input_tokens: 500, cache_read_input_tokens: 3000, output_tokens: 120 }, costUsd: 0.0123 });
+  assert.deepEqual(claude, { input: 3510, cached: 3000, output: 120, calls: 1, costUsd: 0.0123 });
+  const codex = normalizeUsage("codex", { usage: { input_tokens: 2000, cached_input_tokens: 1500, output_tokens: 300 } });
+  assert.deepEqual(codex, { input: 2000, cached: 1500, output: 300, calls: 1 });
+  assert.equal(normalizeUsage("codex", { usage: {} }), null);
+  const m = addMissionUsage(addMissionUsage(null, "claude", claude!), "codex", codex!);
+  assert.deepEqual(m.total, { input: 5510, cached: 4500, output: 420, calls: 2, costUsd: 0.0123 });
+  assert.equal(m.byProvider.codex?.input, 2000);
+});
+
+test("modelo por rol: por defecto lo potente solo para implementar y corregir", async () => {
+  const { ENGINE_MODELS } = await import("../src/server/config");
+  assert.equal(ENGINE_MODELS.claude.implement.model, null, "implementar: el modelo de tu cuenta");
+  assert.equal(ENGINE_MODELS.claude.fix.model, null);
+  for (const r of ["plan", "research", "review", "chat"] as const) assert.equal(ENGINE_MODELS.claude[r].model, "sonnet", r);
+  assert.equal(ENGINE_MODELS.codex.review.effort, "medium");
+  assert.equal(ENGINE_MODELS.codex.chat.effort, "low");
+  assert.equal(ENGINE_MODELS.codex.implement.effort, null);
+});

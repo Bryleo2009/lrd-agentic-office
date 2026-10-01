@@ -2391,3 +2391,20 @@ label.check input {
     grid-template-columns: 1fr;
   }
 }
+
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.models-table th,
+.models-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.models-table th {
+  color: var(--muted);
+  font-weight: 600;
+}

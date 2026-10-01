@@ -14,6 +14,9 @@ export interface SessionConfig {
   timeoutMs: number;
   /** Servidores MCP permitidos (datos reales). Vacío = ninguno. */
   mcpAllow: string[];
+  /** Modelo y esfuerzo de razonamiento para la próxima llamada (null = los de la cuenta). */
+  model?: string | null;
+  effort?: string | null;
 }
 
 /** Metadata de sesión. Nunca contiene credenciales. */

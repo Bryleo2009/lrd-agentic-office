@@ -95,7 +95,7 @@ export function deleteLesson(id: string): boolean {
  * Lecciones para una misión (según sus repos y si usa datos). Las que se demostró que no sirven
  * (el problema se repite igual, o las misiones que las usan fallan) dejan de enviarse.
  */
-export function pickLessons(scopes: string[], limit = 12): Lesson[] {
+export function pickLessons(scopes: string[], limit = 8): Lesson[] {
   const want = new Set([...scopes, "general"]);
   return listLessons()
     .filter((l) => want.has(l.scope) && lessonHealth(l) !== "no_sirve")
@@ -108,7 +108,7 @@ export function lessonsPrompt(picked: Lesson[]): string {
 }
 
 /** Lecciones útiles para una misión, como texto para el prompt. */
-export function lessonsFor(scopes: string[], limit = 12): string {
+export function lessonsFor(scopes: string[], limit = 8): string {
   return lessonsPrompt(pickLessons(scopes, limit));
 }
 

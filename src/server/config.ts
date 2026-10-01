@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentId, Provider, PublicConfig, RepositoryConfig } from "../shared/types";
+import type { AgentId, EngineRole, Provider, PublicConfig, RepositoryConfig } from "../shared/types";
 import { isAgentId } from "../shared/agents";
 
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -91,6 +91,49 @@ export const config = {
   reposFile: path.resolve(PROJECT_ROOT, env.LRD_REPOS_FILE || "config/repositories.json"),
 };
 
+const ROLES: EngineRole[] = ["plan", "implement", "research", "review", "fix", "chat"];
+/**
+ * Modelo por rol (ahorro de tokens): implementar y corregir usan el modelo de tu cuenta; planificar, investigar,
+ * revisar y chatear usan uno más liviano. Claude: alias de `claude --model` (sonnet, opus, haiku…). Codex: el modelo
+ * queda el de tu cuenta y se baja el esfuerzo de razonamiento. Cada valor se cambia con CLAUDE_MODEL_<ROL>,
+ * CODEX_MODEL_<ROL> y CODEX_EFFORT_<ROL> (vacío = el de tu cuenta).
+ */
+const MODEL_DEFAULTS: Record<Provider, Record<EngineRole, { model: string; effort: string }>> = {
+  claude: {
+    plan: { model: "sonnet", effort: "" },
+    implement: { model: "", effort: "" },
+    research: { model: "sonnet", effort: "" },
+    review: { model: "sonnet", effort: "" },
+    fix: { model: "", effort: "" },
+    chat: { model: "sonnet", effort: "" },
+  },
+  codex: {
+    plan: { model: "", effort: "medium" },
+    implement: { model: "", effort: "" },
+    research: { model: "", effort: "medium" },
+    review: { model: "", effort: "medium" },
+    fix: { model: "", effort: "" },
+    chat: { model: "", effort: "low" },
+  },
+};
+function engineModels(): PublicConfig["engineModels"] {
+  const pick = (k: string, def: string) => {
+    const v = env[k];
+    return (v === undefined ? def : v).trim() || null;
+  };
+  const out = {} as PublicConfig["engineModels"];
+  for (const p of ["claude", "codex"] as Provider[]) {
+    out[p] = {} as PublicConfig["engineModels"][Provider];
+    for (const r of ROLES) {
+      const P = p.toUpperCase();
+      const R = r.toUpperCase();
+      out[p][r] = { model: pick(`${P}_MODEL_${R}`, MODEL_DEFAULTS[p][r].model), effort: p === "codex" ? pick(`CODEX_EFFORT_${R}`, MODEL_DEFAULTS[p][r].effort) : null };
+    }
+  }
+  return out;
+}
+export const ENGINE_MODELS = engineModels();
+
 export const paths = {
   repos: path.join(config.workspaceRoot, "repos"),
   worktrees: path.join(config.workspaceRoot, "worktrees"),
@@ -149,5 +192,6 @@ export function publicConfig(): PublicConfig {
     agentEngines: config.agentEngines,
     approvals: config.approvals,
     retentionDays: config.retentionDays,
+    engineModels: ENGINE_MODELS,
   };
 }

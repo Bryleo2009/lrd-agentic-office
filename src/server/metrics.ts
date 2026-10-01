@@ -1,5 +1,6 @@
 import type { EngineUsage, Provider, UsageMetrics } from "../shared/types";
 import { sqlite } from "./database/db";
+import { addUsage, emptyUsage } from "./usage";
 
 /**
  * Métricas de uso por motor (Codex / Claude Code) a partir de lo que realmente pasó: pasos ejecutados,
@@ -13,7 +14,16 @@ export function usageMetrics(days = 30): UsageMetrics {
   const switches = sqlite
     .prepare(`SELECT metadata FROM runtime_events WHERE type = 'AGENT_STATUS' AND timestamp >= ? AND metadata LIKE '%engineSwitch%'`)
     .all(since) as { metadata: string }[];
-  const missions = sqlite.prepare(`SELECT provider, status, questions FROM missions WHERE created_at >= ?`).all(since) as { provider: Provider; status: string; questions: string | null }[];
+  const missions = sqlite.prepare(`SELECT provider, status, questions, usage FROM missions WHERE created_at >= ?`).all(since) as { provider: Provider; status: string; questions: string | null; usage: string | null }[];
+  const tokensOf = (p: Provider) =>
+    missions.reduce((acc, m) => {
+      try {
+        const u = m.usage ? JSON.parse(m.usage)?.byProvider?.[p] : null;
+        return u ? addUsage(acc, u) : acc;
+      } catch {
+        return acc;
+      }
+    }, emptyUsage());
 
   const engines: EngineUsage[] = (["codex", "claude"] as Provider[]).map((provider) => {
     const mine = steps.filter((s) => s.provider === provider);
@@ -23,6 +33,7 @@ export function usageMetrics(days = 30): UsageMetrics {
     for (const s of mine) byKind[s.kind] = (byKind[s.kind] ?? 0) + 1;
     return {
       provider,
+      tokens: tokensOf(provider),
       steps: mine.length,
       done: mine.filter((s) => s.status === "done").length,
       failed: mine.filter((s) => s.status === "failed").length,

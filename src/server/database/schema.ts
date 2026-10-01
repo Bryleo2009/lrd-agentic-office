@@ -46,6 +46,7 @@ export const missions = sqliteTable("missions", {
   taskKind: text("task_kind").notNull().default("general"),
   lessonIds: text("lesson_ids").notNull().default("[]"),
   delivery: text("delivery"),
+  usage: text("usage"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -68,6 +69,7 @@ export const missionSteps = sqliteTable("mission_steps", {
   finishedAt: text("finished_at"),
   position: integer("position").notNull().default(0),
   repositoryId: text("repository_id"),
+  usage: text("usage"),
 });
 
 export const agentSessions = sqliteTable("agent_sessions", {

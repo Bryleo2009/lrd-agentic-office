@@ -2,8 +2,9 @@ import { customAlphabet } from "nanoid";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import fs from "node:fs";
 import path from "node:path";
-import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionQuestion, type MissionRepo, type MissionStatus, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
-import { config, loadRepositories, paths } from "../config";
+import { isToolMcp, MULTI_REPO_SEP, NO_REPO, type EngineRole, type TokenUsage, type AgentId, type CiInfo, type EngineChoice, type Mission, type MissionQuestion, type MissionRepo, type MissionStatus, type MissionStep, type Provider, type RepositoryConfig } from "../../shared/types";
+import { config, ENGINE_MODELS, loadRepositories, paths } from "../config";
+import { addMissionUsage, addUsage, normalizeUsage } from "../usage";
 import * as repo from "../database/repo";
 import { eventBus } from "../events/AgentEventBus";
 import { gitManager, GitError, isProtected, slugify } from "../integrations/git/GitWorktreeManager";
@@ -139,6 +140,15 @@ export class AgentOrchestrator {
   /** Cómo entregar: lo que entendió Atlas al planificar; si no hay plan de Atlas, la lectura por reglas del texto. */
   private prefsFor(m: Mission): { publish: boolean; directToBase: boolean } {
     return m.delivery ?? deliveryPrefs(m.prompt);
+  }
+
+  /** Suma los tokens de un turno a la misión (y al paso, si lo hay). */
+  private recordUsage(missionId: string | null, provider: Provider, u: TokenUsage, step?: MissionStep): void {
+    if (!missionId) return;
+    const m = repo.getMission(missionId);
+    if (!m) return;
+    this.setMission(missionId, { usage: addMissionUsage(m.usage, provider, u) });
+    if (step) this.setStep(missionId, step, { usage: addUsage(step.usage, u) });
   }
 
   isActive(missionId: string): boolean {
@@ -977,17 +987,12 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
       });
       if (rt.cancelled) return { ok: false, error: "Cancelada", provider: res.provider };
       const reply = timedOut || answer === null ? "(no respondió a tiempo: decide lo más prudente, sigue y explica el supuesto en tu resumen)" : `"${answer}"`;
-      res = await this.runAgent(
-        id,
-        agentId,
-        res.provider,
-        cwd,
-        permission,
-        `${prompt}\n\n---\nYa le preguntaste al usuario: "${q.text}". Su respuesta: ${reply}\nNo vuelvas a preguntar lo mismo: continúa con tu tarea usando esa respuesta y termina como se pidió. Si la respuesta es una preferencia general que el equipo debe recordar en próximas misiones, agrega una línea "LECCIÓN: …".`,
-        title,
-        rt,
-        step,
-      );
+      // Solo la respuesta (y un recordatorio corto de la tarea): el agente ya tiene el pedido completo en su conversación.
+      // Si su sesión ya no existe (cambió de motor), se le reenvía todo.
+      const sameSession = sessions.get(id, agentId)?.session;
+      const continuing = !!sameSession?.hasTurn && sameSession.provider === res.provider;
+      const answerMsg = `Ya le preguntaste al usuario: "${q.text}". Su respuesta: ${reply}\nNo vuelvas a preguntar lo mismo: continúa con tu tarea usando esa respuesta y termina como se pidió. Si la respuesta es una preferencia general que el equipo debe recordar en próximas misiones, agrega una línea "LECCIÓN: …".`;
+      res = await this.runAgent(id, agentId, res.provider, cwd, permission, continuing ? `${answerMsg}\n(Tu tarea sigue siendo: ${title}${step ? ` — ${step.task.slice(0, 600)}` : ""})` : `${prompt}\n\n---\n${answerMsg}`, title, rt, step);
     }
     return res;
   }
@@ -1227,7 +1232,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     const provider = runtime.forAgent(step.agentId, mission.provider, mission.engine);
     this.setStep(id, step, { status: "running", provider, startedAt: new Date().toISOString() });
     const inbound = messageBus.take(id, step.agentId);
-    const prompt = this.agentPrompt(mission, step, inbound, w, rt);
+    const prompt = this.agentPrompt(mission, step, inbound, w, rt, provider);
     const res = await this.runAgentAsking(id, step.agentId, provider, wt, step.writes ? "workspace-write" : "read-only", prompt, step.title, rt, step);
     if (res.ok) {
       if (step.writes && w) rt.lastWriter.set(w.cfg.id, step.agentId);
@@ -1275,7 +1280,10 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     for (const d of deps.filter((x) => x.agentId === step.agentId)) messageBus.handoff(id, d.agentId, step.agentId, summaryLine(d.result!), d.result!);
   }
 
-  private agentPrompt(m: Mission, step: MissionStep, inbound: Handoff[], w: WorkRepo | null, rt: MissionRuntime): string {
+  private agentPrompt(m: Mission, step: MissionStep, inbound: Handoff[], w: WorkRepo | null, rt: MissionRuntime, provider?: Provider): string {
+    // Si el agente sigue en su misma conversación de esta misión, ya recibió lecciones, biblioteca y guía: no se repiten.
+    const prior = sessions.get(m.id, step.agentId)?.session;
+    const continuing = !!prior?.hasTurn && (!provider || prior.provider === provider) && (!w || prior.config.cwd === w.wt);
     const others = w ? [...rt.repos.values()].filter((x) => x.cfg.id !== w.cfg.id) : [];
     const where =
       m.repositoryId === NO_REPO || !w
@@ -1287,7 +1295,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
           }`;
     const a = getAgent(step.agentId);
     const ctx = inbound.length
-      ? `\n\nContexto real entregado por tu equipo:\n${inbound.map((h) => `--- De ${getAgent(h.from).name} ---\n${h.payload.slice(0, 12000)}`).join("\n\n")}`
+      ? `\n\nContexto real entregado por tu equipo:\n${inbound.map((h) => `--- De ${getAgent(h.from).name} ---\n${h.payload.length > 6000 ? `${h.payload.slice(0, 6000)}…` : h.payload}`).join("\n\n")}`
       : "";
     const check = w?.cfg.checkCommand;
     const writes = step.writes
@@ -1296,7 +1304,7 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     return `${a.systemBrief}
 
 Misión global del equipo: ${m.prompt}
-${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${this.lessonsText(m)}${this.libraryText(m, step.agentId, `${m.prompt}\n${step.title}\n${step.task}`)}${guideFor(m.taskKind)}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
+${where}${m.allowMcp ? mcpRules(m.mcpServers) + "\n- Ve DIRECTO a la consulta que responde la tarea: no verifiques autenticación/permisos ni explores el repositorio antes; hazlo solo si la consulta falla." : ""}${continuing ? "\n(Las lecciones, la documentación y la guía del equipo ya las tienes en esta conversación.)" : `${this.lessonsText(m)}${this.libraryText(m, step.agentId, `${m.prompt}\n${step.title}\n${step.task}`)}${guideFor(m.taskKind)}`}${step.writes ? checklistPrompt(repo.getMission(m.id)?.checklist ?? [], "implement") : ""}
 
 Tu tarea (${step.title}):
 ${step.task}
@@ -1327,17 +1335,27 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     title: string,
     rt: MissionRuntime,
     step?: MissionStep,
+    role: EngineRole = roleOf(step),
   ): Promise<{ ok: true; text: string; provider: Provider } | { ok: false; error: string; provider: Provider }> {
     let current = provider;
+    let accountModel = false;
     for (let attempt = 0; ; attempt++) {
       const release = runtime.acquire(current); // síncrono: el reparto ve esta carga de inmediato
       let res: Awaited<ReturnType<AgentOrchestrator["runAgentOnce"]>>;
       try {
-        res = await this.runAgentOnce(missionId, agentId, current, cwd, permission, prompt, title, rt, step);
+        res = await this.runAgentOnce(missionId, agentId, current, cwd, permission, prompt, title, rt, step, accountModel ? null : role);
       } finally {
         release();
       }
       if (res.ok || rt.cancelled) return { ...res, provider: current };
+      // ¿El modelo liviano de este rol no está disponible en tu plan? Se repite con el modelo de tu cuenta.
+      const model = ENGINE_MODELS[current][role]?.model;
+      if (!accountModel && model && /model/i.test(res.raw) && /(invalid|not found|not available|unknown|does not exist|not supported|no access|not allowed|unsupported)/i.test(res.raw)) {
+        accountModel = true;
+        this.emit(missionId, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `El modelo "${model}" no está disponible: ${getAgent(agentId).name} sigue con el de tu cuenta`, detail: `Cámbialo con ${current.toUpperCase()}_MODEL_${role.toUpperCase()} en el .env de la oficina.`, status: "warning" });
+        attempt--;
+        continue;
+      }
       const sat = saturationFrom(res.raw, config.engineCooldownMs);
       if (!sat) return { ok: false, error: res.error, provider: current };
       const s = runtime.markSaturated(current, sat.reason, sat.ms);
@@ -1372,6 +1390,7 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
     title: string,
     rt: MissionRuntime,
     step?: MissionStep,
+    role: EngineRole | null = roleOf(step),
   ): Promise<{ ok: true; text: string } | { ok: false; error: string; raw: string }> {
     let entry;
     try {
@@ -1382,6 +1401,10 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
       return { ok: false, error: msg, raw: msg };
     }
     const exec = runtime.get(provider);
+    // Modelo / esfuerzo según el rol (más liviano para planificar, investigar y revisar).
+    const pick = role ? ENGINE_MODELS[provider][role] : null;
+    entry.session.config.model = pick?.model ?? null;
+    entry.session.config.effort = pick?.effort ?? null;
     entry.busy = true;
     sessions.sync(entry, "running");
     if (step) this.setStep(missionId, step, { provider });
@@ -1395,6 +1418,10 @@ Termina tu respuesta con una línea que empiece exactamente con "RESUMEN:" segui
         this.publishExecutorEvent(missionId, agentId, provider, entry.session.cliSessionId, ev, step);
         if (ev.type === "SESSION_CONNECTED" || ev.type === "SESSION_STARTED") sessions.sync(entry, "running");
         if (ev.type === "AGENT_FINISHED") finalText = ev.finalText ?? ev.detail ?? "";
+        if (ev.type === "AGENT_FINISHED" || ev.type === "AGENT_ERROR") {
+          const u = normalizeUsage(provider, ev.metadata as Record<string, unknown>);
+          if (u) this.recordUsage(missionId, provider, u, step);
+        }
         if (ev.type === "AGENT_ERROR") {
           const hint = (ev.metadata as { hint?: string } | undefined)?.hint;
           error = hint ? `${ev.title}. ${hint}` : `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
@@ -1476,8 +1503,8 @@ Termina con "RESUMEN:" y una frase corta.
 git diff --stat:
 ${diff.stat}
 
-Diff:
-${diff.patch.slice(0, 40000)}`;
+Diff${diff.patch.length > 16000 ? " (recortado: para ver el resto usa `git diff -- <archivo>` en tu carpeta)" : ""}:
+${diff.patch.slice(0, 16000)}`;
     const res = await this.runAgent(id, "atlas", provider, w.wt, "read-only", prompt, step.title, rt, step);
     if (!res.ok) {
       // Una revisión que no se pudo hacer no bloquea la misión: QA y la revisión final siguen.
@@ -1695,13 +1722,13 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
     const diff = {
       files: diffs.flatMap(({ w, d }) => d.files.map((f) => (multi ? `${w.cfg.shortName}/${f}` : f))),
       stat: diffs.filter(({ d }) => d.stat).map(({ w, d }) => (multi ? `### ${w.cfg.name}\n${d.stat}` : d.stat)).join("\n\n"),
-      patch: multi ? diffs.filter(({ d }) => d.patch).map(({ w, d }) => `### ${w.cfg.name}\n${d.patch.slice(0, 15000)}`).join("\n\n") : "",
+      patch: multi ? diffs.filter(({ d }) => d.patch).map(({ w, d }) => `### ${w.cfg.name}\n${d.patch.slice(0, 8000)}`).join("\n\n") : "",
     };
     if (diff.files.length)
       this.emit(id, "atlas", { provider: "git", sessionId: null, type: "GIT_DIFF", title: `Diff final: ${diff.files.length} archivo(s)${multi ? ` en ${diffs.filter(({ d }) => d.files.length).length} repos` : ""}`, detail: diff.stat, status: "info", metadata: { files: diff.files } });
     const findings = all
       .filter((s) => (s.kind === "agent" || s.kind === "xreview") && s.result)
-      .map((s) => `## ${getAgent(s.agentId).name} — ${s.title}${s.provider ? ` (${s.provider === "codex" ? "Codex" : "Claude Code"})` : ""}\n${s.result}`)
+      .map((s) => `## ${getAgent(s.agentId).name} — ${s.title}${s.provider ? ` (${s.provider === "codex" ? "Codex" : "Claude Code"})` : ""}\n${(s.result ?? "").length > 2500 ? `${s.result!.slice(0, 2500)}…` : s.result}`)
       .join("\n\n");
     const inbound = messageBus.take(id, "atlas");
     let summary = findings || "Sin resultados de agentes.";
@@ -1712,9 +1739,9 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
 ${analysis ? "Consolida los hallazgos en una respuesta final clara para el usuario (causa, evidencia, recomendación)." : "Revisa el diff del worktree (puedes usar git diff) y valida que resuelve la misión sin efectos colaterales. Resume qué cambió y riesgos."}
 
 Resultados de los agentes:
-${findings.slice(0, 30000)}
+${findings.slice(0, 15000)}
 ${inbound.length ? `\nEntregas recibidas: ${inbound.map((h) => `${getAgent(h.from).name}: ${h.title}`).join("; ")}` : ""}
-${diff.stat ? `\ngit diff --stat:\n${diff.stat}` : ""}${diff.patch ? `\n\nCambios (la misión abarca varios repositorios; tu carpeta es solo el primero, aquí tienes el diff de todos):\n${diff.patch.slice(0, 30000)}` : ""}
+${diff.stat ? `\ngit diff --stat:\n${diff.stat}` : ""}${diff.patch ? `\n\nCambios (la misión abarca varios repositorios; tu carpeta es solo el primero, aquí tienes el diff de todos, recortado):\n${diff.patch.slice(0, 16000)}` : ""}
 
 ${checklistPrompt(mission.checklist ?? [], "verify")}
 No modifiques archivos. Responde en español, conciso (máx. 15 líneas).
@@ -1780,6 +1807,8 @@ Termina con "RESUMEN:" y una frase corta.`;
     if (entry.busy) throw new MissionError(`${getAgent(agentId).name} está respondiendo otro mensaje`, 409);
     entry.session.config.permission = target ? "workspace-write" : "read-only";
     if (target) entry.session.config.cwd = target.wt;
+    entry.session.config.model = ENGINE_MODELS[provider].chat.model;
+    entry.session.config.effort = ENGINE_MODELS[provider].chat.effort;
     const before = target ? await gitManager.status(target.wt).catch(() => "") : "";
 
     const intentNote = target
@@ -1808,6 +1837,10 @@ Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "AC
         const iter = entry.session.hasTurn ? exec.sendMessage(entry.session, prompt) : exec.executeTask(entry.session, { prompt, title: "chat" });
         for await (const ev of iter) {
           if (ev.type === "AGENT_FINISHED") finalText = ev.finalText ?? ev.detail ?? finalText;
+          if (ev.type === "AGENT_FINISHED" || ev.type === "AGENT_ERROR") {
+            const u = normalizeUsage(provider, ev.metadata as Record<string, unknown>);
+            if (u) this.recordUsage(mid, provider, u);
+          }
           const pub = this.publishExecutorEvent(mid, agentId, provider, entry.session.cliSessionId, { ...ev, metadata: { ...(ev.metadata ?? {}), chat: true } });
           if (ev.type === "AGENT_MESSAGE") eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: ev.detail ?? ev.title, done: false });
           if (ev.type === "AGENT_ERROR") err = `${ev.title}${ev.detail ? `: ${ev.detail}` : ""}`;
@@ -2021,6 +2054,14 @@ ${m.summary ? `Resumen de Atlas: ${m.summary.slice(0, 2000)}` : ""}`;
 function summaryLine(text: string): string {
   const m = text.match(/RESUMEN:\s*(.+)/i);
   return firstLine(m ? m[1] : text, 90);
+}
+
+/** Rol de una llamada según el paso: decide el modelo / esfuerzo. Sin paso = una corrección (QA, CI, secretos…). */
+function roleOf(step?: MissionStep): EngineRole {
+  if (!step) return "fix";
+  if (step.kind === "plan") return "plan";
+  if (step.kind === "xreview" || step.kind === "review") return "review";
+  return step.writes ? "implement" : "research";
 }
 
 type ChatAction = "respuesta" | "cambio" | "publicar" | "publicar_en_base";

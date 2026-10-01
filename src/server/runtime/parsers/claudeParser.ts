@@ -62,7 +62,7 @@ export class ClaudeStreamParser {
       case "result": {
         this.sessionId = o.session_id ?? this.sessionId;
         this.finalText = typeof o.result === "string" ? o.result : this.lastAssistantText;
-        const meta = { cliSessionId: o.session_id, turns: o.num_turns, durationMs: o.duration_ms, subtype: o.subtype };
+        const meta = { cliSessionId: o.session_id, turns: o.num_turns, durationMs: o.duration_ms, subtype: o.subtype, usage: o.usage ?? null, costUsd: typeof o.total_cost_usd === "number" ? o.total_cost_usd : null };
         if (o.is_error || (o.subtype && o.subtype !== "success")) {
           const raw = clip(String(o.result ?? o.subtype ?? "error"), 2000);
           const ex =

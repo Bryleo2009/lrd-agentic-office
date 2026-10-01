@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRuntimeEvent } from "../../shared/events";
 import type { AgentId, Mission, MissionStep } from "../../shared/types";
-import { branchesOf, isLive, MISSION_STATUS, repoLabel, STEP_STATUS, timeOf } from "../app/format";
+import { branchesOf, fmtTokens, isLive, MISSION_STATUS, repoLabel, STEP_STATUS, timeOf, tokensLabel } from "../app/format";
 import { useStore } from "../app/store";
 import { agentOf as getAgent } from "../app/team";
 import { Checklist, QuestionCard } from "./MissionHud";
@@ -179,6 +179,11 @@ export function ProgressTablet({ onFocusAgent, onChat }: { onFocusAgent: (id: Ag
                     <b>{open.length}</b> esperando tu respuesta
                   </span>
                 )}
+                {mission.usage?.total && (mission.usage.total.input || mission.usage.total.output) ? (
+                  <span title={`${mission.usage.total.calls} llamadas al motor · ${Object.entries(mission.usage.byProvider ?? {}).map(([p, u]) => `${p === "codex" ? "Codex" : "Claude"}: ${tokensLabel(u)}`).join(" · ")}${mission.usage.total.costUsd ? ` · ≈ US$ ${mission.usage.total.costUsd.toFixed(2)} equivalente en API (Claude)` : ""}`}>
+                    <b>{fmtTokens(mission.usage.total.input + mission.usage.total.output)}</b> tokens
+                  </span>
+                ) : null}
                 <span className="muted">{repoLabel(mission) === "none" ? "sin repositorio" : repoLabel(mission)}</span>
               </div>
             </div>
@@ -252,6 +257,10 @@ function TeamPane({ mission, events, now, onFocusAgent, onChat }: { mission: Mis
               </span>
               {engineName(cur.provider) && <span>{engineName(cur.provider)}</span>}
               {cur.startedAt && <span>{dur(stepMs(cur, now))}</span>}
+              {(() => {
+                const t = theirs.reduce((acc, s) => acc + (s.usage ? s.usage.input + s.usage.output : 0), 0);
+                return t ? <span title="Tokens de sus pasos">{fmtTokens(t)} tokens</span> : null;
+              })()}
             </div>
             {last && (
               <div className="tp-last" title={last.detail ?? last.title}>
@@ -291,6 +300,7 @@ function TimelinePane({ mission, steps, now }: { mission: Mission; steps: Missio
                   {KIND[s.kind]} · {STEP_STATUS[s.status]}
                   {engineName(s.provider) ? ` · ${engineName(s.provider)}` : ""}
                   {s.startedAt ? ` · ${dur(stepMs(s, now))}` : ""}
+                  {tokensLabel(s.usage) ? ` · ${tokensLabel(s.usage)}` : ""}
                 </small>
                 {s.error && <div className="tp-error">{s.error.split("\n")[0]}</div>}
               </div>

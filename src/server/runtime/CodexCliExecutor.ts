@@ -191,8 +191,16 @@ export class CodexCliExecutor extends BaseCliExecutor {
     if (caps.cd) args.push("--cd", session.config.cwd);
     if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
     if (allowSandboxFlag && caps.sandbox) args.push("--sandbox", session.config.permission === "read-only" ? "read-only" : "workspace-write");
-    args.push(...this.mcpArgs(session));
+    args.push(...this.mcpArgs(session), ...this.modelArgs(session));
     return args;
+  }
+
+  /** Modelo y esfuerzo de razonamiento según el rol (como overrides de config: valen para exec y para resume). */
+  private modelArgs(session: AgentSession): string[] {
+    const a: string[] = [];
+    if (session.config.model && /^[\w.:-]+$/.test(session.config.model)) a.push("-c", `model="${session.config.model}"`);
+    if (session.config.effort && /^(minimal|low|medium|high|xhigh)$/.test(session.config.effort)) a.push("-c", `model_reasoning_effort="${session.config.effort}"`);
+    return a;
   }
 
   private withPrompt(args: string[], prompt: string): { args: string[]; stdin?: string } {
@@ -219,7 +227,7 @@ export class CodexCliExecutor extends BaseCliExecutor {
     const caps = this.status?.capabilities ?? {};
     if (session.cliSessionId && caps.resume) {
       const sandbox = session.config.permission === "read-only" ? "read-only" : "workspace-write";
-      const args = ["exec", "resume", caps.json ? "--json" : "--experimental-json", "-c", `sandbox_mode="${sandbox}"`, ...this.mcpArgs(session)];
+      const args = ["exec", "resume", caps.json ? "--json" : "--experimental-json", "-c", `sandbox_mode="${sandbox}"`, ...this.mcpArgs(session), ...this.modelArgs(session)];
       if (caps.skipGitRepoCheck) args.push("--skip-git-repo-check");
       args.push(session.cliSessionId);
       return { ...this.withPrompt(args, message), parser, label: "codex-resume" };

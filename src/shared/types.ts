@@ -115,7 +115,31 @@ export interface MissionStep {
   finishedAt: string | null;
   /** Repositorio en el que trabaja el paso (misiones con varios repos). null = el principal. */
   repositoryId?: string | null;
+  /** Tokens que gastó el paso (todas sus llamadas al motor). */
+  usage?: TokenUsage | null;
 }
+
+/** Consumo de tokens (lo que reportan Codex y Claude Code en cada turno). */
+export interface TokenUsage {
+  /** Tokens de entrada (incluye los que vinieron de caché). */
+  input: number;
+  /** De esos, cuántos se leyeron de caché (más baratos / no cuentan igual para el límite). */
+  cached: number;
+  output: number;
+  /** Llamadas al motor. */
+  calls: number;
+  /** Equivalente en USD si el motor lo informa (Claude Code). */
+  costUsd?: number;
+}
+
+/** Consumo de una misión: total y por motor. */
+export interface MissionUsage {
+  total: TokenUsage;
+  byProvider: Partial<Record<Provider, TokenUsage>>;
+}
+
+/** Rol de una llamada al motor: decide qué modelo / esfuerzo usar (más liviano donde no hace falta el más potente). */
+export type EngineRole = "plan" | "implement" | "research" | "review" | "fix" | "chat";
 
 /** Estado de cada repositorio en una misión con varios repos (p. ej. back + front en paralelo). */
 export interface MissionRepo {
@@ -219,6 +243,8 @@ export interface Mission {
   lessonIds: string[];
   /** Cómo entregar según lo que entendió Atlas de la misión (null = aún no planificada). */
   delivery?: { publish: boolean; directToBase: boolean } | null;
+  /** Tokens de toda la misión (pasos, correcciones y chat). */
+  usage?: MissionUsage | null;
   createdAt: string;
   updatedAt: string;
   steps: MissionStep[];
@@ -309,6 +335,8 @@ export interface PublicConfig {
   /** Qué necesita tu aprobación antes de publicar. */
   approvals: { direct: boolean; migrations: boolean };
   retentionDays: number;
+  /** Modelo / esfuerzo por rol y motor (vacío = el de tu cuenta). */
+  engineModels: Record<Provider, Record<EngineRole, { model: string | null; effort: string | null }>>;
 }
 
 export interface Snapshot {
@@ -372,6 +400,8 @@ export function lessonHealth(l: Lesson): LessonHealth {
 /** Uso por motor (Codex / Claude Code) en un periodo. */
 export interface EngineUsage {
   provider: Provider;
+  /** Tokens del periodo (entrada, de caché y salida). */
+  tokens: TokenUsage;
   steps: number;
   done: number;
   failed: number;

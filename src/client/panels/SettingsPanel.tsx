@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isToolMcp, lessonHealth, type AgentId, type AgentProfile, type Appearance, type CleanupReport, type Gender, type Lesson, type ProjectInspection, type Provider, type RepositoryConfig, type UsageMetrics } from "../../shared/types";
 import { api } from "../app/api";
+import { fmtTokens } from "../app/format";
 import { useStore } from "../app/store";
 import type { OfficeEngine } from "../office/OfficeEngine";
 
@@ -798,6 +799,10 @@ function UsageTab() {
                   <dd>{e.missions} misión(es)</dd>
                   <dt>Llegó a su límite</dt>
                   <dd>{e.saturations} vez/veces</dd>
+                  <dt>Tokens</dt>
+                  <dd title={`${e.tokens.calls} llamadas · ${e.tokens.cached} de entrada leídos de caché${e.tokens.costUsd ? ` · ≈ US$ ${e.tokens.costUsd.toFixed(2)} equivalente en API` : ""}`}>
+                    {fmtTokens(e.tokens.input + e.tokens.output)}
+                  </dd>
                 </dl>
                 {Object.keys(e.byKind).length > 0 && (
                   <div className="muted tiny">
@@ -815,6 +820,8 @@ function UsageTab() {
           </p>
         </>
       )}
+
+      <ModelsByRole />
 
       <div className="repo-row">
         <div className="repo-head">
@@ -842,6 +849,54 @@ function UsageTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  plan: "Planificar (Atlas)",
+  implement: "Implementar",
+  research: "Investigar",
+  review: "Revisar (cruzada y final)",
+  fix: "Corregir (QA, CI)",
+  chat: "Chat",
+};
+
+/** Qué modelo / esfuerzo usa cada rol: lo más potente solo donde hace falta (ahorra tokens). */
+function ModelsByRole() {
+  const models = useStore((s) => s.config?.engineModels);
+  if (!models) return null;
+  const roles = Object.keys(ROLE_LABEL) as (keyof typeof models.claude)[];
+  return (
+    <div className="repo-row">
+      <div className="repo-head">
+        <b className="grow">Modelo por rol</b>
+      </div>
+      <table className="models-table">
+        <thead>
+          <tr>
+            <th>Rol</th>
+            <th>Claude Code</th>
+            <th>Codex</th>
+          </tr>
+        </thead>
+        <tbody>
+          {roles.map((r) => (
+            <tr key={r}>
+              <td>{ROLE_LABEL[r]}</td>
+              <td>{models.claude[r].model ?? <span className="muted">el de tu cuenta</span>}</td>
+              <td>
+                {models.codex[r].model ?? <span className="muted">el de tu cuenta</span>}
+                {models.codex[r].effort ? ` · esfuerzo ${models.codex[r].effort}` : ""}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="fineprint">
+        Se cambia en el <code>.env</code> con <code>CLAUDE_MODEL_&lt;ROL&gt;</code>, <code>CODEX_MODEL_&lt;ROL&gt;</code> y <code>CODEX_EFFORT_&lt;ROL&gt;</code> (roles: PLAN, IMPLEMENT, RESEARCH, REVIEW,
+        FIX, CHAT; vacío = el de tu cuenta). Si un modelo no está en tu plan, la oficina sigue con el de tu cuenta y te avisa.
+      </p>
     </div>
   );
 }

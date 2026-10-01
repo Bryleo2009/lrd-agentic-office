@@ -522,3 +522,31 @@ test("limpieza: se borra el worktree de una misión cuyo trabajo ya está en la 
   assert.equal(git(["branch", "--list", merged.branch!], clone), "");
   assert.match(git(["branch", "--list", merged.branch!], front), /agentic\//, "en el remoto se conserva");
 });
+
+test("tokens y modelo por rol: cada paso registra su consumo; planificar y revisar van con menos esfuerzo; la respuesta a una pregunta no reenvía todo", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  process.env.FAKE_CALLS = path.join(root, "tokens-calls.log");
+  const m0 = await orchestrator.createMission({ prompt: "Implementa el ticket promedio en la API PRUEBA_PREGUNTA", repositoryId: "lrd-back", engine: "codex" });
+  const q = await openQuestion(m0.id);
+  orchestrator.answerQuestion(m0.id, q.id, "Con IGV");
+  const m = await finished(m0.id);
+  assert.equal(m.status, "done", m.error ?? "");
+
+  // Consumo: total de la misión, por motor y por paso (lo que informa el motor en cada turno).
+  assert.ok(m.usage && m.usage.total.calls >= 4 && m.usage.total.input >= 4000, JSON.stringify(m.usage));
+  assert.equal(m.usage.total.cached, m.usage.total.calls * 400);
+  assert.ok(m.usage.byProvider.codex);
+  const plan = m.steps.find((s) => s.kind === "plan")!;
+  assert.equal(plan.usage?.calls, 1);
+  assert.ok(m.steps.filter((s) => s.kind === "agent").every((s) => (s.usage?.calls ?? 0) >= 1));
+
+  // Modelo por rol: planificar y revisar con esfuerzo medio; implementar con el de la cuenta.
+  const calls = fs.readFileSync(process.env.FAKE_CALLS!, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(calls.find((c) => c.kind === "plan")?.effort, "medium");
+  assert.ok(calls.filter((c) => c.kind === "review").every((c) => c.effort === "medium"), "revisiones con esfuerzo medio");
+  assert.ok(calls.filter((c) => c.kind === "agent" && !c.followUp).every((c) => c.effort === null), "implementar: el de la cuenta");
+  // Tras la pregunta, el agente recibió solo la respuesta (corta), no todo el pedido otra vez.
+  const follow = calls.find((c) => c.followUp);
+  const first = calls.find((c) => c.kind === "question");
+  assert.ok(follow && first && follow.chars < first.chars / 2, `respuesta corta: ${follow?.chars} vs ${first?.chars}`);
+});

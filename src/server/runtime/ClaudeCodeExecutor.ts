@@ -160,6 +160,7 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
       appendSystemPrompt: /--append-system-prompt\b/.test(help),
       authCommand: /\bauth\b/.test(help),
       strictMcp: /--strict-mcp-config\b/.test(help),
+      model: /--model\b/.test(help),
       mcpCommand: /\bmcp\b/.test(help),
     };
     if (st.capabilities.mcpCommand) st.mcpServers = await this.listMcp();
@@ -229,6 +230,8 @@ export class ClaudeCodeExecutor extends BaseCliExecutor {
     if (!session.config.mcpAllow.length && caps.strictMcp) a.push("--strict-mcp-config");
     if (caps.disallowedTools) a.push("--disallowedTools", ...(ro ? [...READ_ONLY_DENY, ...ALWAYS_DENY] : ALWAYS_DENY));
     if (appendSystem && caps.appendSystemPrompt) a.push("--append-system-prompt", appendSystem);
+    // Modelo según el rol (p. ej. sonnet para revisar o planificar): menos consumo donde no hace falta el más potente.
+    if (session.config.model && caps.model) a.push("--model", session.config.model);
     return a;
   }
 
