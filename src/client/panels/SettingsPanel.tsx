@@ -597,12 +597,17 @@ function UsageTab() {
           </button>
         </div>
         <p className="fineprint">
-          Borra worktrees y logs de misiones terminadas hace más de {retention} días (<code>RETENTION_DAYS</code>; se hace sola al arrancar y cada día). Nunca toca misiones en curso, carpetas con cambios sin
-          commit ni commits sin publicar. Las ramas no se borran.
+          Borra la carpeta de trabajo (worktree) de una misión apenas su trabajo ya está en una rama principal (merge o squash), y los worktrees y logs de misiones terminadas hace más de{" "}
+          {retention} días (<code>RETENTION_DAYS</code>). Se hace sola al arrancar y cada 3 horas. Nunca toca misiones en curso, carpetas con cambios sin commit ni commits sin publicar. En GitHub no se
+          borra ninguna rama; en tu PC solo la rama local agentic/… ya integrada.
         </p>
         {preview && (
           <div className="muted tiny">
             {preview.dryRun ? "Se borrarían" : "Se borraron"} {preview.removed.length} carpeta(s) · {preview.freedMb} MB
+            {preview.removed.length > 0 &&
+              ` (${Object.entries(preview.removed.reduce<Record<string, number>>((acc, r) => ((acc[r.reason ?? "otro"] = (acc[r.reason ?? "otro"] ?? 0) + 1), acc), {}))
+                .map(([why, n]) => `${n} ${why}`)
+                .join(" · ")})`}
             {preview.kept.length ? ` · se conservan ${preview.kept.length}: ${preview.kept.map((k) => `${k.path.split(/[\\/]/).slice(-2).join("/")} (${k.reason})`).join(", ")}` : ""}
           </div>
         )}

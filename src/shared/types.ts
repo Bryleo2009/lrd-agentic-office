@@ -367,7 +367,7 @@ export interface UsageMetrics {
 export interface CleanupReport {
   dryRun: boolean;
   days: number;
-  removed: { path: string; missionId: string | null; kind: "worktree" | "runs"; mb: number }[];
+  removed: { path: string; missionId: string | null; kind: "worktree" | "runs"; mb: number; reason?: string }[];
   kept: { path: string; reason: string }[];
   freedMb: number;
 }

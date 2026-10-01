@@ -85,6 +85,8 @@ export const config = {
   secretScan: bool(env.SECRET_SCAN, true),
   /** Días que se conservan worktrees y logs de misiones terminadas (0 = no limpiar). */
   retentionDays: Math.max(0, Number(env.RETENTION_DAYS ?? 14)),
+  /** Borrar el worktree de una misión apenas su trabajo ya está en una rama principal (a cualquier edad). */
+  cleanupMerged: bool(env.CLEANUP_MERGED, true),
   guidesDir: path.resolve(PROJECT_ROOT, env.LRD_GUIDES_DIR || "config/guides"),
   reposFile: path.resolve(PROJECT_ROOT, env.LRD_REPOS_FILE || "config/repositories.json"),
 };

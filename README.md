@@ -141,9 +141,12 @@ Puedes elegir cualquier misión reciente en el selector.
 ### Uso por motor y limpieza (Ajustes → Uso y limpieza)
 
 Pasos, tiempo de trabajo, fallas, límites alcanzados y misiones de Codex y de Claude Code (7/30/90 días), más cuántas
-preguntas y aprobaciones hubo. La **limpieza** borra worktrees y logs crudos de misiones terminadas hace más de
-`RETENTION_DAYS` días (al arrancar, cada día, o con el botón tras ver la vista previa). Nunca toca misiones en curso,
-carpetas con cambios sin commit ni commits sin publicar; las ramas no se borran.
+preguntas y aprobaciones hubo. La **limpieza** borra el worktree de una misión **apenas su trabajo ya está en una rama principal**
+(la base de la misión, `main`/`release/*` o las bases permitidas; detecta merge normal, rebase y squash), y los worktrees
+y logs crudos de misiones terminadas hace más de `RETENTION_DAYS` días. Corre al arrancar, cada 3 horas, o con el botón
+tras ver la vista previa (que dice el motivo de cada uno). Nunca toca misiones en curso, carpetas con cambios sin commit
+ni commits sin publicar, y espera 1 hora tras terminar una misión por si la ajustas por chat. En GitHub no borra ramas; en
+tu PC borra solo la rama local `agentic/…` ya integrada. Para desactivar lo de las integradas: `CLEANUP_MERGED=false`.
 
 ### MCP local de LRD para Producción y QA (`mcp/lrd-data`)
 

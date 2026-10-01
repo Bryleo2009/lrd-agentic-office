@@ -232,11 +232,12 @@ if (resumed.length) console.log(`[lrd] Retomando ${resumed.length} misión(es) i
 // Limpieza de carpetas viejas (worktrees y logs de misiones terminadas): al arrancar y una vez al día.
 const housekeeping = () =>
   cleanupOld({ isActive: (id) => orchestrator.isActive(id) })
-    .then((r) => r.removed.length && console.log(`[lrd] Limpieza: ${r.removed.length} carpeta(s) de más de ${r.days} días (${r.freedMb} MB).`))
+    .then((r) => r.removed.length && console.log(`[lrd] Limpieza: ${r.removed.length} carpeta(s) (${r.freedMb} MB): ${[...new Set(r.removed.map((x) => x.reason))].join(", ")}.`))
     .catch((e) => console.error("[lrd] Limpieza fallida:", e));
-if (config.retentionDays > 0) {
+// Al arrancar y cada 3 horas: así una misión cuyo trabajo ya se integró a una rama principal no deja su carpeta mucho tiempo.
+if (config.retentionDays > 0 || config.cleanupMerged) {
   void housekeeping();
-  setInterval(() => void housekeeping(), 24 * 3_600_000).unref();
+  setInterval(() => void housekeeping(), 3 * 3_600_000).unref();
 }
 
 const rt = runtime.snapshot();

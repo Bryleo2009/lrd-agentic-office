@@ -488,3 +488,37 @@ test("chat: el agente analiza el pedido; una pregunta no cambia nada aunque nomb
   for (let i = 0; i < 300 && repo.getMission(m.id)!.commitSha === m.commitSha; i++) await new Promise((r) => setTimeout(r, 200));
   assert.notEqual(repo.getMission(m.id)!.commitSha, m.commitSha, "se hizo commit del cambio");
 });
+
+test("limpieza: se borra el worktree de una misión cuyo trabajo ya está en la rama principal (merge o squash); el resto se conserva", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const { cleanupOld, mergedInto } = await import("../src/server/maintenance");
+  const merged = await finished((await orchestrator.createMission({ prompt: "Implementa el resumen por canal en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id);
+  const squashed = await finished((await orchestrator.createMission({ prompt: "Implementa el total por mesa en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id);
+  const pending = await finished((await orchestrator.createMission({ prompt: "Implementa el filtro por mozo en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id);
+  for (const m of [merged, squashed, pending]) assert.ok(m.pushed && m.worktree && fs.existsSync(m.worktree), m.error ?? "");
+
+  // En GitHub: la primera se integra con merge normal y la segunda con squash; la tercera sigue pendiente.
+  const dev = path.join(root, "dev-merge");
+  git(["clone", "-q", "--branch", "release/fase2", front, dev], root);
+  const id = ["-c", "user.name=d", "-c", "user.email=d@d"];
+  git([...id, "merge", "-q", "--no-edit", `origin/${merged.branch}`], dev);
+  git([...id, "merge", "-q", "--squash", "-X", "theirs", `origin/${squashed.branch}`], dev);
+  git([...id, "commit", "-qm", "squash: total por mesa"], dev);
+  git(["push", "-q", "origin", "HEAD:refs/heads/release/fase2"], dev);
+
+  const preview = await cleanupOld({ dryRun: true, days: 0, graceMs: 0, isActive: () => false });
+  const byMission = new Map(preview.removed.filter((r) => r.kind === "worktree").map((r) => [r.missionId, r.reason]));
+  assert.equal(byMission.get(merged.id), "ya está en release/fase2");
+  assert.equal(byMission.get(squashed.id), "ya está en release/fase2", "también con squash");
+  assert.ok(!byMission.has(pending.id), "la que no está integrada se conserva");
+  assert.ok(fs.existsSync(merged.worktree!), "la vista previa no borra");
+
+  await cleanupOld({ days: 0, graceMs: 0, isActive: () => false });
+  assert.ok(!fs.existsSync(merged.worktree!) && !fs.existsSync(squashed.worktree!), "se borraron");
+  assert.ok(fs.existsSync(pending.worktree!));
+  assert.equal(await mergedInto(pending.worktree!, ["release/fase2"]), null);
+  // La rama local agentic/… integrada se borra del clon (en GitHub sigue).
+  const clone = path.join(root, "ws", "repos", "lrd-front");
+  assert.equal(git(["branch", "--list", merged.branch!], clone), "");
+  assert.match(git(["branch", "--list", merged.branch!], front), /agentic\//, "en el remoto se conserva");
+});
