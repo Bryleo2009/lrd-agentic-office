@@ -14,6 +14,8 @@ export interface PlannedStep {
 
 export interface MissionPlan {
   deliverable: "code_change" | "analysis";
+  /** Cómo entregar, según lo que Atlas entendió de la misión completa (no por palabras sueltas). */
+  delivery?: { publish: boolean; directToBase: boolean };
   /** Criterios de aceptación verificables extraídos de la misión. */
   checklist?: string[];
   steps: PlannedStep[];
@@ -161,7 +163,7 @@ export function inferArea(prompt: string, repo: RepositoryConfig | null): string
 
 /** La misión pide explícitamente modificar código (corregir, implementar, …). */
 export function asksChange(prompt: string): boolean {
-  return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|\bcambio\b|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona|\bajusta|\bquita|reemplaza|renombra|\bedita|\baplica|\bpublica(?!ndo)|reintenta/.test(norm(prompt));
+  return /corrig|arregl|\bfix|implementa|agrega|anade|\bcrea|cambia|\bcambio\b|modifica|refactor|actualiza|prepara el pr|elimina|repara|soluciona|\bajusta|\bquita|reemplaza|renombra|\bedita|\baplica|\bpublica(?!ndo)|reintenta|revi[eé]rt|revert|\bdeshaz|deshac|restaur|\brestore/.test(norm(prompt));
 }
 
 const R = "(?:rama|branch)";
@@ -279,10 +281,11 @@ Reglas del plan:
 - Si la misión pide corregir/arreglar/implementar, al menos un paso debe tener "writes": true (y "deliverable": "code_change").
 - Pasos independientes no deben depender entre sí (se ejecutan en paralelo).
 - "task" debe ser una instrucción concreta y autocontenida para ese agente.
+- "delivery": cómo quiere el usuario recibir los cambios, según lo que pide en TODO el texto (no por una palabra suelta): "publish" = false solo si pide no publicar / dejarlo local; "directToBase" = true solo si pide trabajar sobre la misma rama (la rama base o la que nombra) sin crear una rama nueva.
 - "checklist": los criterios de aceptación VERIFICABLES que pide la misión (archivos a tocar o no tocar, reglas, pruebas pedidas, entregables), cada uno en una frase corta; máximo 12. Si la misión no pide nada concreto, déjalo vacío.
 
 Responde ÚNICAMENTE con un bloque JSON válido, sin texto adicional, con esta forma:
-{"deliverable":"code_change"|"analysis","checklist":["…"],"steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
+{"deliverable":"code_change"|"analysis","delivery":{"publish":true,"directToBase":false},"checklist":["…"],"steps":[{"id":"s1","agent":"rafa","title":"…","task":"…","dependsOn":[],"writes":false${multi.length > 1 ? ',"repo":"<id del repositorio>"' : ""}}]}`;
 }
 
 /** Repo por defecto de un agente en misiones de varios repos: Mica → frontend, el resto → backend. */
@@ -312,9 +315,10 @@ export function parsePlan(text: string, prompt: string, repos: RepositoryConfig[
 
 function validate(j: any, prompt: string, repos: RepositoryConfig[] = []): MissionPlan | null {
   if (!j || !Array.isArray(j.steps) || j.steps.length === 0) return null;
-  // Si la misión pide corregir, el planificador no puede degradarla a "analysis":
-  // eso dejaba pasos como "Corregir …" en modo lectura sin poder editar nada.
-  const analysis = isAnalysisOnly(prompt) || (j.deliverable === "analysis" && !asksChange(prompt));
+  // Lo decide Atlas, que leyó la misión completa. Si se contradice (dice "analysis" pero planifica pasos
+  // que modifican código), manda lo que planificó: los pasos con cambios no se degradan a solo lectura.
+  void prompt;
+  const analysis = j.deliverable === "analysis" && !j.steps.some((s: any) => !!s?.writes);
   const steps: PlannedStep[] = [];
   const ids = new Set<string>();
   for (const [i, s] of j.steps.slice(0, 6).entries()) {
@@ -337,7 +341,8 @@ function validate(j: any, prompt: string, repos: RepositoryConfig[] = []): Missi
   for (const s of steps) s.dependsOn = s.dependsOn.filter((d) => ids.has(d) && d !== s.id);
   if (hasCycle(steps)) return null;
   const checklist = Array.isArray(j.checklist) ? j.checklist.map((x: unknown) => String(x)).filter((x: string) => x.trim().length > 3).slice(0, 12) : undefined;
-  return { deliverable: analysis ? "analysis" : "code_change", steps, source: "ai", ...(checklist?.length ? { checklist } : {}) };
+  const d = j.delivery && typeof j.delivery === "object" ? { publish: j.delivery.publish !== false, directToBase: j.delivery.directToBase === true } : undefined;
+  return { deliverable: analysis ? "analysis" : "code_change", steps, source: "ai", ...(checklist?.length ? { checklist } : {}), ...(d ? { delivery: d } : {}) };
 }
 
 function hasCycle(steps: PlannedStep[]): boolean {

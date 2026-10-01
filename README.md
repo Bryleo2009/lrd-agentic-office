@@ -77,9 +77,13 @@ Basta con un motor disponible (`✓ Codex ✗ Claude` o al revés es válido).
      base, le pasa el log al desarrollador, que corrige; se hace commit, se publica y se espera otra vez. Si falla también
      en la base, se informa que no lo causa la misión. Si la rama no dispara workflows o `gh` no tiene sesión, se dice
      claramente: nunca se declara verde sin una ejecución real en verde.
-   - **Ajustes por chat**: sobre una misión terminada, pídele un cambio al agente en su chat ("cambia…", "corrige…",
-     "ajusta…"). Edita en la carpeta de esa misión y la oficina hace el commit en la misma rama, la publica y espera
-     GitHub Actions. Las preguntas normales siguen siendo de solo lectura.
+   - **Ajustes por chat**: sobre una misión terminada, háblale al agente con normalidad. **Él analiza tu mensaje completo**
+     (no se busca una palabra clave) y declara qué entendió: solo responder, cambiar el código (también revertir o
+     deshacer), publicar lo ya hecho o pasar la entrega directo a la rama base. La oficina actúa según eso: si hubo
+     cambio, hace el commit en la misma rama, la publica y espera GitHub Actions. Si no está claro, el agente te
+     pregunta antes de tocar nada. En la actividad verás "Mica entendió: …".
+   - **Cómo entregar lo decide Atlas** al planificar, leyendo toda la misión (publicar o no, rama nueva o la misma
+     rama); las reglas por palabras solo se usan si Atlas no devolvió un plan válido.
    - **Codex + Claude Code juntos**: en Automático cada paso va al motor menos cargado (back y front en paralelo usan
      uno cada uno; la preferencia de cada agente se respeta). Si un motor llega a su límite, el paso sigue con el otro y
      la oficina lo recuerda como *saturado* hasta que vuelva (según su mensaje, o `ENGINE_COOLDOWN_MIN`), también tras

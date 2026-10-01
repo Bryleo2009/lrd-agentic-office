@@ -36,10 +36,18 @@ process.stdin.on("end", () => {
     ] };
     return say("```json\n" + JSON.stringify(plan) + "\n```");
   }
-  if (input.includes("te pide un CAMBIO")) {
-    fs.writeFileSync(path.join(process.cwd(), "chat-change.txt"), "ajuste pedido por chat\n");
-    log({ kind: "chat-change" });
-    return say("Hecho: ajusté el texto del filtro.\nLECCIÓN: Los textos visibles de los filtros van en español y con mayúscula inicial.\nRESUMEN: cambio aplicado");
+  // Chat con una misión: el "agente" analiza el mensaje y declara qué entendió (ACCIÓN: …), como el real.
+  if (input.includes('"ACCIÓN: publicar_en_base"')) {
+    const msg = (input.match(/Mensaje del usuario: ([\s\S]*)$/)?.[1] ?? "").trim();
+    log({ kind: "chat", msg });
+    if (/directo|esa rama|misma rama/i.test(msg)) return say("Entendido: paso la entrega directo a la rama.\nACCIÓN: publicar_en_base");
+    if (/^(por favor\s+)?(publica|vuelve a publicar|reintenta)/i.test(msg)) return say("Publico lo que ya está hecho.\nACCIÓN: publicar");
+    if (/cambia|corrige|revierte|deshaz|ajusta/i.test(msg)) {
+      fs.writeFileSync(path.join(process.cwd(), "chat-change.txt"), `ajuste pedido por chat: ${msg}\n`);
+      log({ kind: "chat-change" });
+      return say("Hecho: ajusté el texto del filtro.\nLECCIÓN: Los textos visibles de los filtros van en español y con mayúscula inicial.\nRESUMEN: cambio aplicado\nACCIÓN: cambio");
+    }
+    return say("Te explico: ese archivo se tocó para el QA.\nACCIÓN: respuesta");
   }
   if (input.includes("GitHub Actions falló en")) {
     fs.writeFileSync(path.join(process.cwd(), "ci-fixed.txt"), "arreglado\n");

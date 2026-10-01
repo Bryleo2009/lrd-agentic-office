@@ -463,3 +463,28 @@ test("QA sin su entorno (sin MySQL de pruebas): no se culpa al código; se valid
   assert.equal(c.status, "done", c.error ?? "");
   assert.ok(c.steps.some((s) => s.kind === "qa" && /QA OK/.test(s.result ?? "")), "QA corrió con APP_ENV del CI");
 });
+
+test("chat: el agente analiza el pedido; una pregunta no cambia nada aunque nombre archivos, y un pedido de revertir sí se aplica", { timeout: 120_000 }, async () => {
+  const { orchestrator } = await import("../src/server/agents/AgentOrchestrator");
+  const repo = await import("../src/server/database/repo");
+  const m = await finished((await orchestrator.createMission({ prompt: "Implementa el filtro de canal en `x/lrd-front`", repositoryId: "lrd-front", engine: "codex" })).id);
+  assert.equal(m.status, "done", m.error ?? "");
+  const understood = async (n: number) => {
+    for (let i = 0; i < 300; i++) {
+      const evs = repo.missionEvents(m.id).filter((e) => (e.metadata as { chatAction?: string } | null)?.chatAction);
+      if (evs.length >= n) return evs.at(-1)!;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error("no declaró qué entendió");
+  };
+  // Una pregunta que menciona archivos y "cambios": solo responde.
+  await orchestrator.chat("mica", "¿por qué tocaste composer.json y qué cambios hiciste ahí?", m.id, "codex");
+  assert.equal(((await understood(1)).metadata as { chatAction: string }).chatAction, "respuesta");
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(repo.getMission(m.id)!.commitSha, m.commitSha, "no hubo commit");
+  // "Revierte…" (que antes caía en solo lectura): el agente entiende que es un cambio y la oficina lo publica.
+  await orchestrator.chat("mica", "Revierte el texto del filtro a como estaba", m.id, "codex");
+  assert.equal(((await understood(2)).metadata as { chatAction: string }).chatAction, "cambio");
+  for (let i = 0; i < 300 && repo.getMission(m.id)!.commitSha === m.commitSha; i++) await new Promise((r) => setTimeout(r, 200));
+  assert.notEqual(repo.getMission(m.id)!.commitSha, m.commitSha, "se hizo commit del cambio");
+});

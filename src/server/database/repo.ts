@@ -18,15 +18,15 @@ function safeList(v: unknown): string[] {
 export function insertMission(m: Mission): void {
   const { steps, ...row } = m;
   db.insert(schema.missions)
-    .values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []), checklist: JSON.stringify(m.checklist ?? []), questions: JSON.stringify(m.questions ?? []), lessonIds: JSON.stringify(m.lessonIds ?? []) })
+    .values({ ...row, mcpServers: JSON.stringify(m.mcpServers ?? []), repos: JSON.stringify(m.repos ?? []), ci: JSON.stringify(m.ci ?? []), checklist: JSON.stringify(m.checklist ?? []), questions: JSON.stringify(m.questions ?? []), lessonIds: JSON.stringify(m.lessonIds ?? []), delivery: m.delivery ? JSON.stringify(m.delivery) : null })
     .run();
 }
 
 export function updateMission(id: string, patch: Partial<Omit<Mission, "id" | "steps">>): void {
-  const { mcpServers, repos, ci, checklist, questions, lessonIds, ...rest } = patch;
+  const { mcpServers, repos, ci, checklist, questions, lessonIds, delivery, ...rest } = patch;
   const json = (k: string, v: unknown) => (v ? { [k]: JSON.stringify(v) } : {});
   db.update(schema.missions)
-    .set({ ...rest, ...json("mcpServers", mcpServers), ...json("repos", repos), ...json("ci", ci), ...json("checklist", checklist), ...json("questions", questions), ...json("lessonIds", lessonIds), updatedAt: now() })
+    .set({ ...rest, ...json("mcpServers", mcpServers), ...json("repos", repos), ...json("ci", ci), ...json("checklist", checklist), ...json("questions", questions), ...json("lessonIds", lessonIds), ...(delivery !== undefined ? { delivery: delivery ? JSON.stringify(delivery) : null } : {}), updatedAt: now() })
     .where(eq(schema.missions.id, id))
     .run();
 }
@@ -71,7 +71,7 @@ export function getMission(id: string): Mission | null {
     .orderBy(asc(schema.missionSteps.position))
     .all()
     .map(rowToStep);
-  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], checklist: safeRepos(r.checklist) as unknown as Mission["checklist"], questions: safeRepos(r.questions) as unknown as Mission["questions"], taskKind: (r.taskKind ?? "general") as Mission["taskKind"], lessonIds: safeList(r.lessonIds), steps } as Mission;
+  return { ...(r as any), pushed: !!r.pushed, allowMcp: !!r.allowMcp, mcpServers: safeList(r.mcpServers), repos: safeRepos(r.repos), ci: safeRepos(r.ci) as unknown as Mission["ci"], checklist: safeRepos(r.checklist) as unknown as Mission["checklist"], questions: safeRepos(r.questions) as unknown as Mission["questions"], taskKind: (r.taskKind ?? "general") as Mission["taskKind"], lessonIds: safeList(r.lessonIds), delivery: (() => { try { return r.delivery ? JSON.parse(r.delivery) : null; } catch { return null; } })(), steps } as Mission;
 }
 
 export function listMissions(limit = 30): Mission[] {

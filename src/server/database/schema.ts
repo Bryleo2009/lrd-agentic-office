@@ -45,6 +45,7 @@ export const missions = sqliteTable("missions", {
   questions: text("questions").notNull().default("[]"),
   taskKind: text("task_kind").notNull().default("general"),
   lessonIds: text("lesson_ids").notNull().default("[]"),
+  delivery: text("delivery"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

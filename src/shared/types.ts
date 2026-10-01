@@ -217,6 +217,8 @@ export interface Mission {
   taskKind: TaskKind;
   /** Lecciones que recibió el equipo en esta misión (para medir si sirven). */
   lessonIds: string[];
+  /** Cómo entregar según lo que entendió Atlas de la misión (null = aún no planificada). */
+  delivery?: { publish: boolean; directToBase: boolean } | null;
   createdAt: string;
   updatedAt: string;
   steps: MissionStep[];

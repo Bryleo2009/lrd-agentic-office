@@ -249,3 +249,10 @@ test("QA: variables del CI por repo, chequeo de la base de pruebas y fallas de e
   assert.deepEqual(detectQa(wt, base).commands, ["php artisan test --parallel"]);
   assert.deepEqual(detectQa(wt, { ...(base as object), qaParallelTests: false } as never).commands, ["php artisan test"], "como el CI: en serie");
 });
+
+test("chat: 'revierte', 'deshaz' y 'restaura' son pedidos de cambio (no de solo lectura)", async () => {
+  const { asksChange } = await import("../src/server/missions/MissionPlanner");
+  for (const t of ["revierte composer.json y composer.lock a HEAD", "Revierte tus cambios en composer.json", "deshaz lo de paratest", "restaura el composer.lock", "git restore composer.json"])
+    assert.equal(asksChange(t), true, t);
+  for (const t of ["¿por qué tocaste composer.json?", "explícame qué hiciste", "¿por qué se borra la orden?", "dime cuánto devuelve el total"]) assert.equal(asksChange(t), false, t);
+});

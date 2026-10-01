@@ -162,14 +162,18 @@ test("parser: llamadas MCP se muestran como consultas de datos", () => {
   assert.equal((e2[0].metadata as any).mcp, true);
 });
 
-test("planner: una misión que pide corregir no se degrada a análisis aunque la IA diga 'analysis'", () => {
+test("planner: decide Atlas (no las palabras); si planifica cambios, no se degradan a análisis", () => {
   const ai = JSON.stringify({ deliverable: "analysis", steps: [{ id: "s1", agent: "diego", title: "Corregir CI", task: "x", dependsOn: [], writes: true }] });
   const fix = parsePlan(ai, "Revisa el CI de fase3.1 y corrige los fallos");
   assert.equal(fix?.deliverable, "code_change");
   assert.equal(fix?.steps[0].writes, true);
-  const onlyReview = parsePlan(ai, "Revisa por qué falla el CI de fase3.1");
-  assert.equal(onlyReview?.deliverable, "analysis");
-  assert.equal(onlyReview?.steps[0].writes, false);
+  const review = JSON.stringify({ deliverable: "analysis", steps: [{ id: "s1", agent: "diego", title: "Revisar CI", task: "x", dependsOn: [], writes: false }] });
+  assert.equal(parsePlan(review, "Revisa por qué falla el CI de fase3.1")?.deliverable, "analysis");
+  // Aunque el texto diga "analiza", si Atlas entendió que hay que corregir, se corrige.
+  const code = JSON.stringify({ deliverable: "code_change", delivery: { publish: true, directToBase: true }, steps: [{ id: "s1", agent: "diego", title: "Corregir", task: "x", dependsOn: [], writes: true }] });
+  const p = parsePlan(code, "Analiza la rama feature/x; si no pasa por el embudo, corrígelo sobre la misma rama");
+  assert.equal(p?.steps[0].writes, true);
+  assert.deepEqual(p?.delivery, { publish: true, directToBase: true }, "cómo entregar lo decide Atlas");
 });
 
 test("entrega: por defecto rama nueva publicada; la misión puede pedir lo contrario", () => {

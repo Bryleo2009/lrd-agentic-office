@@ -68,6 +68,9 @@ interface State {
 
 const MAX_EVENTS = 600;
 
+/** Quita del chat la línea técnica "ACCIÓN: …" con la que el agente declara qué entendió. */
+const chatText = (t: string) => t.replace(/^\s*\**\s*ACCI[OÓ]N\s*\**\s*:\s*\**\s*(respuesta|cambio|publicar_en_base|publicar)\b.*$/gim, "").trim();
+
 export const useStore = create<State>((set, get) => ({
   connected: false,
   runtime: [],
@@ -102,7 +105,7 @@ export const useStore = create<State>((set, get) => ({
       const meta = (e.metadata ?? {}) as Record<string, unknown>;
       if (!meta.chat || !e.agentId) continue;
       if (e.type === "MESSAGE_SENT" && meta.fromUser) (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "user", text: e.detail ?? e.title, at: e.timestamp });
-      if (e.type === "AGENT_MESSAGE") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "agent", text: e.detail ?? e.title, at: e.timestamp });
+      if (e.type === "AGENT_MESSAGE") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "agent", text: chatText(e.detail ?? e.title), at: e.timestamp });
       if (e.type === "AGENT_ERROR") (chats[e.agentId] ??= []).push({ id: e.id, agentId: e.agentId, from: "system", text: `${e.title}${e.detail ? `\n${e.detail}` : ""}`, at: e.timestamp });
     }
     for (const r of deliveredReports()) (chats.atlas ??= []).push({ id: r.id, agentId: "atlas", from: "agent", text: r.text, at: r.at });
@@ -128,7 +131,7 @@ export const useStore = create<State>((set, get) => ({
     const meta = (e.metadata ?? {}) as Record<string, unknown>;
     if (meta.chat && e.agentId && e.type === "AGENT_MESSAGE") {
       const chats = { ...get().chats };
-      chats[e.agentId] = [...(chats[e.agentId] ?? []), { id: e.id, agentId: e.agentId, from: "agent", text: e.detail ?? e.title, at: e.timestamp }];
+      chats[e.agentId] = [...(chats[e.agentId] ?? []), { id: e.id, agentId: e.agentId, from: "agent", text: chatText(e.detail ?? e.title), at: e.timestamp }];
       set({ events: next, chats });
       return;
     }

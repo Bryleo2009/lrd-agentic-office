@@ -14,7 +14,7 @@ import { guideFor, TASK_KIND_LABEL, taskKind } from "../missions/guides";
 import { ASK_RULE, extractQuestion, pickOption, questionKey } from "../missions/questions";
 import { migrationFiles, scanSecrets } from "../missions/secrets";
 import { libraryPrompt, relatedDocs, saveDoc, type NewDoc } from "../library";
-import { asksChange, buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
+import { buildPlannerPrompt, ciRunRef, deliveryPrefs, inferBase, mentionedBranches, isQuickLookup, requestedBranch, inferArea, inferRepo, isAnalysisOnly, mcpRules, parsePlan, rulesPlan, type MissionPlan } from "../missions/MissionPlanner";
 import { applyChecklistMarks, checklistPrompt, extractChecklist, makeChecklist } from "../missions/checklist";
 import { waitForCi } from "../missions/ci";
 import { detectQa, environmentProblem, failureLine, qaEnvFor, qaPreflight, runShell } from "../missions/qa";
@@ -134,6 +134,11 @@ export class AgentOrchestrator {
     Object.assign(step, patch);
     repo.updateStep(step.id, patch);
     this.pushMission(missionId);
+  }
+
+  /** Cómo entregar: lo que entendió Atlas al planificar; si no hay plan de Atlas, la lectura por reglas del texto. */
+  private prefsFor(m: Mission): { publish: boolean; directToBase: boolean } {
+    return m.delivery ?? deliveryPrefs(m.prompt);
   }
 
   isActive(missionId: string): boolean {
@@ -368,7 +373,7 @@ export class AgentOrchestrator {
 
       // 4) Rama + commit + publicación por repositorio (orquestador, nunca la IA). Sin cambios → sin rama.
       this.setMission(id, { status: "committing" });
-      const prefs = deliveryPrefs(mission.prompt);
+      const prefs = this.prefsFor(repo.getMission(id) ?? mission);
       const results: MissionRepo[] = [];
       for (const r of rs) results.push(await this.deliverRepo(id, mission, rt.repos.get(r.id)!, steps, rt, prefs, multi));
       const main = results.find((x) => x.commitSha) ?? results[0];
@@ -1120,7 +1125,15 @@ Es una consulta puntual: respóndela directo con los datos, en pocas consultas (
     steps.forEach((s, i) => repo.addStep(s, i + 1));
     // Checklist visible: la que extrajo Atlas o, si no, las viñetas/puntos de la misión.
     const checklist = makeChecklist(plan.checklist?.length ? plan.checklist : extractChecklist(mission.prompt));
-    this.setMission(id, { status: "running", planSource: plan.source, ...(checklist.length ? { checklist } : {}) });
+    this.setMission(id, { status: "running", planSource: plan.source, ...(checklist.length ? { checklist } : {}), ...(plan.delivery ? { delivery: plan.delivery } : {}) });
+    if (plan.delivery && rs.length && (plan.delivery.directToBase || !plan.delivery.publish))
+      this.emit(id, "atlas", {
+        provider: "system",
+        sessionId: null,
+        type: "AGENT_STATUS",
+        title: `Atlas entendió la entrega: ${plan.delivery.directToBase ? "sobre la misma rama, sin rama nueva" : "rama nueva"}${plan.delivery.publish ? "" : ", sin publicar"}`,
+        status: "info",
+      });
     const multi = rs.length > 1;
     const repoTag = (s: MissionStep) => (multi && s.repositoryId ? ` [${rs.find((x) => x.id === s.repositoryId)?.shortName ?? s.repositoryId}]` : "");
     this.emit(id, "atlas", {
@@ -1618,7 +1631,7 @@ No hagas git commit/push. Termina con "RESUMEN:" y una frase corta.`,
    */
   private qaUnavailable(id: string, step: MissionStep, r: RepositoryConfig, tag: string, reason: string): void {
     const m = repo.getMission(id)!;
-    const ciCovers = config.ciWaitEnabled && config.githubPushEnabled && deliveryPrefs(m.prompt).publish;
+    const ciCovers = config.ciWaitEnabled && config.githubPushEnabled && this.prefsFor(m).publish;
     const how = r.qaEnv?.DB_CONNECTION
       ? `Para correrlo en esta PC, levanta la base de pruebas como en el CI (p. ej. MySQL con base y usuario lrd_ci) o apunta a otra con CI_DB_HOST, CI_DB_PORT, CI_DB_DATABASE, CI_DB_USERNAME y CI_DB_PASSWORD en el .env de la oficina.`
       : "Revisa el entorno de QA de este repositorio en config/repositories.json (qaEnv).";
@@ -1746,50 +1759,41 @@ Termina con "RESUMEN:" y una frase corta.`;
     }
     const noRepoCwd = mission && mission.repositoryId === NO_REPO ? path.join(paths.runs, mission.id, "workspace") : null;
     if (noRepoCwd) fs.mkdirSync(noRepoCwd, { recursive: true });
-    // ¿Pide un cambio de código sobre una misión con repositorio ya terminada? Entonces el agente puede
-    // editar en la carpeta de esa misión y la oficina hace commit en su misma rama, la publica y espera CI.
-    const change = mission && mission.repositoryId !== NO_REPO && asksChange(message) ? this.chatChangeTarget(mission, agentId) : null;
-    if (change && this.active.has(mission!.id)) throw new MissionError("La misión todavía está en curso: espera a que termine para pedir ajustes por chat.", 409);
-    // "Hazlo directo en esa rama" sobre una misión ya entregada en una rama agentic/…: la oficina publica esos
-    // commits en la rama base (si no está protegida) y la entrega pasa a ser esa rama. Sin despertar al agente.
-    if (mission && mission.repositoryId !== NO_REPO && !this.active.has(mission.id) && deliveryPrefs(message).directToBase && this.agenticDeliveries(mission).length) {
-      eventBus.publish({ missionId: mission.id, agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
-      void this.promoteToBase(mission, agentId)
-        .catch((e) => {
-          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
-          this.chatNote(mission.id, agentId, g ? `No pude pasar los cambios a la rama base: ${g.title}.\n\n${g.hint}` : `No pude pasar los cambios a la rama base: ${(e as Error).message}`);
-        })
-        .finally(() => eventBus.broadcast({ kind: "chat", agentId, missionId: mission.id, delta: "", done: true }));
-      return;
+    // El agente ANALIZA el mensaje completo y decide qué se le pide (responder, cambiar código, publicar, pasar la
+    // entrega a la rama base); la oficina actúa según lo que declara. Nada se decide por palabras sueltas.
+    let target: WorkRepo | null = null;
+    let targetIssue: string | null = null;
+    if (mission && mission.repositoryId !== NO_REPO) {
+      if (this.active.has(mission.id)) targetIssue = "La misión todavía está en curso: no modifiques archivos ahora; si te piden un cambio, explica que podrás hacerlo cuando termine.";
+      else
+        try {
+          target = this.chatChangeTarget(mission, agentId);
+        } catch (e) {
+          targetIssue = `${(e as Error).message} No modifiques archivos; si te piden un cambio, sugiere lanzar una misión nueva.`;
+        }
     }
-    // "publica los cambios" / "reintenta": solo publicar lo que ya está hecho, sin despertar al agente.
-    if (change && message.length < 80 && /^\s*(por favor\s+)?(publica|vuelve a publicar|reintenta)/i.test(message)) {
-      eventBus.publish({ missionId: mission!.id, agentId, provider: "system", sessionId: null, type: "MESSAGE_SENT", title: `Tú → ${getAgent(agentId).name}: ${firstLine(message, 80)}`, detail: message, status: "info", metadata: { chat: true, fromUser: true } });
-      void this.deliverChatChange(mission!, agentId, change, message)
-        .catch((e) => {
-          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
-          this.chatNote(mission!.id, agentId, g ? `Sigo sin poder publicar: ${g.title}.\n\n${g.hint}\n\nDetalle de git:\n\`\`\`\n${tailText(`${e.message}\n${(e as GitError).output}`, 1500)}\n\`\`\`` : `Sigo sin poder publicar: ${(e as Error).message}`);
-          if (repo.getMission(mission!.id)?.status === "committing") this.setMission(mission!.id, { status: "done" });
-        })
-        .finally(() => eventBus.broadcast({ kind: "chat", agentId, missionId: mission!.id, delta: "", done: true }));
-      return;
-    }
-    const cwd = change?.wt ?? mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
+    const cwd = target?.wt ?? mission?.worktree ?? noRepoCwd ?? existing?.session.config.cwd ?? paths.runs;
     const mid = mission?.id ?? null;
     const entry = existing ?? (await sessions.getOrCreate({ missionId: mid, agentId, provider, cwd, permission: "read-only", mcpAllow: mission?.mcpServers ?? [] }));
     if (entry.busy) throw new MissionError(`${getAgent(agentId).name} está respondiendo otro mensaje`, 409);
-    entry.session.config.permission = change ? "workspace-write" : "read-only";
-    if (change) entry.session.config.cwd = change.wt;
+    entry.session.config.permission = target ? "workspace-write" : "read-only";
+    if (target) entry.session.config.cwd = target.wt;
+    const before = target ? await gitManager.status(target.wt).catch(() => "") : "";
 
-    const changeNote = change
-      ? `El usuario te pide un CAMBIO sobre la misión ${mission!.id}: puedes modificar archivos en tu carpeta (${change.cfg.name}, ${change.wt}). Haz el cambio mínimo y correcto${change.cfg.checkCommand ? ` y verifica con \`${change.cfg.checkCommand}\` o la parte relevante` : ""}. No hagas git commit/push ni cambies de rama: al terminar, la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions.
-Este ajuste es una corrección del usuario sobre el trabajo del equipo: si revela algo que el equipo debió hacer bien desde el inicio y es reutilizable (una convención, un archivo que siempre hay que tocar, una preferencia), agrega al final UNA línea "LECCIÓN: …" con la regla general (sin datos del caso).`
-      : "No modifiques archivos: si el usuario pide un cambio de código, dile que lo pida con un verbo claro (p. ej. \"cambia…\", \"corrige…\") o que lance una misión.";
+    const intentNote = target
+      ? `Analiza qué te pide el usuario por la intención de TODO su mensaje y el contexto de esta conversación (no por una palabra suelta), y actúa así:
+- Si pregunta, pide una explicación, opinión o el estado → responde SIN modificar archivos.
+- Si pide modificar, corregir, revertir, deshacer, quitar o agregar algo en el código → hazlo en tu carpeta (${target.cfg.name}: ${target.wt}) con el cambio mínimo y correcto${target.cfg.checkCommand ? `; verifica con \`${target.cfg.checkCommand}\` o la parte relevante` : ""}. No toques dependencias, lockfiles ni configuración de CI salvo que lo pida. No hagas git commit/push ni cambies de rama: la oficina hace el commit en la rama de la misión, la publica y espera GitHub Actions. Si su pedido corrige algo que el equipo debió hacer bien desde el inicio y es reutilizable, agrega una línea "LECCIÓN: …" con la regla general.
+- Si pide publicar (o reintentar la publicación) de lo que ya está hecho → no cambies nada.
+- Si pide que la entrega quede directo en la rama base / la misma rama (sin la rama agentic/…) → no cambies nada.
+- Si no está claro si quiere que cambies código → pregúntale antes de tocar nada.
+Termina SIEMPRE con una última línea exacta, una de: "ACCIÓN: respuesta", "ACCIÓN: cambio", "ACCIÓN: publicar", "ACCIÓN: publicar_en_base".`
+      : (targetIssue ?? "No modifiques archivos en esta conversación: si el usuario pide un cambio de código, sugiere lanzar una misión.");
     const state = mission ? this.missionState(mission) : "";
-    let prompt = change ? `${state}${changeNote}\n\nMensaje del usuario: ${message}` : `${state}${message}`;
+    let prompt = `${state}${intentNote}\n\nMensaje del usuario: ${message}`;
     if (!entry.session.hasTurn) {
       const a = getAgent(agentId);
-      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia. ${changeNote}\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\nMensaje del usuario: ${message}`;
+      prompt = `${a.systemBrief}\nEl usuario te habla directamente por el chat de la oficina. Responde en español, breve y basado en evidencia.\n\n${this.missionContext(mission, agentId)}${lessonsFor(mission ? this.lessonScopes(mission) : ["datos"])}\n\n${prompt}`;
     }
     const exec = runtime.get(provider);
     entry.busy = true;
@@ -1830,25 +1834,46 @@ Este ajuste es una corrección del usuario sobre el trabajo del equipo: si revel
           return;
         }
       }
-      eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
-      if (change && !err) {
+      if (err || !target || !mission) {
+        eventBus.broadcast({ kind: "chat", agentId, missionId: mid, delta: "", done: true, error: err });
+        return;
+      }
+      // Lo que el agente entendió y declaró; si no lo declaró, se juzga por lo que hizo (¿cambió archivos?).
+      const changed = (await gitManager.status(target.wt).catch(() => "")) !== before;
+      const declared = finalText.match(/^\s*\**\s*ACCI[OÓ]N\s*\**\s*:\s*\**\s*(respuesta|cambio|publicar_en_base|publicar)\b/im)?.[1]?.toLowerCase() as ChatAction | undefined;
+      const action: ChatAction = declared ?? (changed ? "cambio" : "respuesta");
+      if (declared) this.emit(mission.id, agentId, { provider: "system", sessionId: null, type: "AGENT_STATUS", title: `${getAgent(agentId).name} entendió: ${CHAT_ACTION_LABEL[action]}`, status: "info", metadata: { chat: true, chatAction: action } });
+      // El chat queda libre apenas responde; publicar y esperar GitHub Actions sigue en segundo plano (con avisos en el chat).
+      eventBus.broadcast({ kind: "chat", agentId, missionId: mission.id, delta: "", done: true });
+      const gitFail = (what: string) => (e: unknown) => {
+        const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
+        this.chatNote(
+          mission.id,
+          agentId,
+          g
+            ? `${what}: ${g.title}.\n\n${g.hint}\n\nLo hecho quedó guardado en la carpeta de la misión; cuando esté resuelto, escríbeme "publica los cambios".\n\nDetalle de git:\n\`\`\`\n${tailText(`${e instanceof Error ? e.message : ""}\n${(e as GitError).output ?? ""}`, 1500)}\n\`\`\``
+            : `${what}: ${(e as Error).message}`,
+        );
+        if (repo.getMission(mission.id)?.status === "committing") this.setMission(mission.id, { status: "done" });
+      };
+      if (action === "respuesta") {
+        if (changed) this.chatNote(mission.id, agentId, "Ojo: quedaron archivos modificados en la carpeta de la misión aunque solo respondí. No los publico; si quieres que los publique, pídemelo, o pídeme que los revierta.");
+        return;
+      }
+      if (action === "cambio" && changed) {
         // Aprender de la corrección: la lección que propone el agente, y cuenta en contra de las lecciones que se usaron.
         const { lessons } = extractLessons(finalText);
-        if (lessons.length) this.learn(mission!.id, agentId, lessons.slice(0, 1), change.cfg.id, "correccion");
-        recordCorrection(mission!.lessonIds ?? [], mission!.id);
+        if (lessons.length) this.learn(mission.id, agentId, lessons.slice(0, 1), target.cfg.id, "correccion");
+        recordCorrection(mission.lessonIds ?? [], mission.id);
       }
-      if (change && !err)
-        await this.deliverChatChange(mission!, agentId, change, message).catch((e) => {
-          const g = e instanceof GitError ? explainGitError(e.message, e.output) : null;
-          this.chatNote(
-            mission!.id,
-            agentId,
-            g
-              ? `No pude publicar el cambio: ${g.title}.\n\n${g.hint}\n\nEl commit quedó guardado en la carpeta de la misión; cuando esté resuelto, escríbeme "publica los cambios".\n\nDetalle de git:\n\`\`\`\n${tailText(`${e.message}\n${(e as GitError).output}`, 1500)}\n\`\`\``
-              : `No pude publicar el cambio: ${(e as Error).message}`,
-          );
-          if (repo.getMission(mission!.id)?.status === "committing") this.setMission(mission!.id, { status: "done" });
-        });
+      if (action === "publicar_en_base") {
+        if (changed) await this.deliverChatChange(mission, agentId, target, message).catch(gitFail("No pude publicar el cambio"));
+        const fresh = repo.getMission(mission.id) ?? mission;
+        if (this.agenticDeliveries(fresh).length) await this.promoteToBase(fresh, agentId).catch(gitFail("No pude pasar los cambios a la rama base"));
+        else this.chatNote(mission.id, agentId, "La entrega ya está en la rama base (o todavía no hay una entrega en una rama agentic/… que pasar).");
+        return;
+      }
+      await this.deliverChatChange(mission, agentId, target, message).catch(gitFail(action === "publicar" ? "Sigo sin poder publicar" : "No pude publicar el cambio"));
     })();
   }
 
@@ -1953,7 +1978,7 @@ Este ajuste es una corrección del usuario sobre el trabajo del equipo: si revel
     try {
       this.setMission(m.id, { status: "committing" });
       const steps = repo.getMission(m.id)!.steps;
-      const res = await this.deliverRepo(m.id, m, w, steps, rt, deliveryPrefs(m.prompt), multi, `ajuste por chat: ${firstLine(message, 50)}`);
+      const res = await this.deliverRepo(m.id, m, w, steps, rt, this.prefsFor(m), multi, `ajuste por chat: ${firstLine(message, 50)}`);
       const patchRepos = multi ? { repos: m.repos.map((r) => (r.repositoryId === res.repositoryId ? { ...r, ...res } : r)) } : {};
       const isMain = !multi || res.repositoryId === m.repositoryId;
       this.setMission(m.id, { ...patchRepos, ...(isMain ? { branch: res.branch, commitSha: res.commitSha, pushed: res.pushed, prUrl: res.prUrl ?? m.prUrl } : {}) });
@@ -1995,5 +2020,13 @@ function summaryLine(text: string): string {
   const m = text.match(/RESUMEN:\s*(.+)/i);
   return firstLine(m ? m[1] : text, 90);
 }
+
+type ChatAction = "respuesta" | "cambio" | "publicar" | "publicar_en_base";
+const CHAT_ACTION_LABEL: Record<ChatAction, string> = {
+  respuesta: "solo responder (sin cambiar archivos)",
+  cambio: "cambiar el código y publicarlo",
+  publicar: "publicar lo que ya está hecho",
+  publicar_en_base: "pasar la entrega directo a la rama base",
+};
 
 export const orchestrator = new AgentOrchestrator();
